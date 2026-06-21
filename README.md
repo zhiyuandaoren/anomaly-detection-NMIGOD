@@ -1,68 +1,67 @@
-# Anomaly Detection Algorithms — CLI Usage Guide
+# 异常检测算法 — CLI 使用指南
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```
 anomaly-detection-NMIGOD/
-├── ADFNR/                  # Algorithm 1: Fuzzy Neighborhood Rough Set
-├── GCN/                    # Algorithm 2: Graph Convolutional Network
-├── GCOD/                   # Algorithm 3: Formal Concept Analysis + Granular Computing
-├── IE/                     # Algorithm 4: Rough Set Information Entropy
-├── KNN/                    # Algorithm 5: K-Nearest Neighbors Distance-Based
-├── NIEOD/                  # Algorithm 6: Neighborhood Information Entropy (Numba)
-├── NMIGOD/                 # Algorithm 7: Neighborhood Mutual Information + GCN
-├── DASOD/                  # Algorithm 8: Dual-View Collaborative FCA
-├── datasets/               # 25 benchmark datasets (CSV)
-├── images/                 # Output visualizations
-│   ├── per_algo/           #   One ROC curve per algorithm (all datasets overlaid)
-│   ├── per_dataset/        #   Precision / Recall / F1 / ROC per dataset (all algorithms overlaid)
-│   └── summary/            #   Global F1 & ROC summary charts
-├── tools/                  # Utility scripts (batch run, metrics collection, plotting, etc.)
+├── ADFNR/                  # 算法 1: 模糊邻域粗糙集
+├── DASOD/                  # 算法 2: 双视角协同形式概念分析
+├── GCN/                    # 算法 3: 图卷积网络半监督分类
+├── GCN-LOF/                # 算法 4: GCN 嵌入 + LOF 混合异常检测
+├── NIEOD/                  # 算法 5: 邻域信息熵 (Numba 加速)
+├── NMIGOD/                 # 算法 6: 邻域互信息 + GCN 半监督检测
+├── datasets/               # 24 个基准数据集 (CSV)
+├── images/                 # 输出可视化
+│   ├── per_algo/           #   每个算法一张 ROC 曲线图 (所有数据集叠加)
+│   ├── per_dataset/        #   每个数据集一张对比图 (Precision / Recall / F1 / ROC)
+│   └── summary/            #   全局 F1 与 ROC 汇总图
+├── tools/                  # 工具脚本 (批量运行、指标收集、绘图等)
 └── README.md
 ```
 
 ---
 
-## Basic Usage
+## 基本用法
 
-- Run without arguments → **Interactive mode** (enter dataset, parameters, etc. step by step)
-- Run with arguments → **Command-line mode** (parameters passed directly; suitable for batch execution)
+- 不带参数运行 → **交互模式** (逐步输入数据集、参数等)
+- 带参数运行 → **命令行模式** (参数直接传入，适合批量执行)
 
-Examples:
+示例：
 ```bash
-python detector.py                                      # Interactive mode
-python detector.py --dataset data.csv --target ...      # Command-line mode
+python detector.py                                      # 交互模式
+python detector.py --dataset data.csv --target ...      # 命令行模式
 ```
 
 ---
 
-## Common Parameters (Shared Across All Algorithms)
+## 通用参数 (所有算法共享)
 
-| Parameter   | Short | Description                                        | Example                  |
-|-------------|-------|----------------------------------------------------|--------------------------|
-| `--dataset` | `-d`  | Single dataset CSV path                            | `--dataset data.csv`     |
-| `--datasets`| `-D`  | Multiple datasets (comma-separated)                | `--datasets a.csv,b.csv` |
-| `--target`  | `-t`  | Ground-truth label column name                     | `--target class`         |
-| `--anomaly` | `-a`  | Anomaly class value(s) (comma-separated)           | `--anomaly "1,-1"`       |
-| `--output`  | `-o`  | Output directory (default: `./output`)             | `--output ./results`     |
+| 参数          | 简写  | 描述                                      | 示例                     |
+|---------------|-------|-------------------------------------------|--------------------------|
+| `--dataset`   | `-d`  | 单个数据集 CSV 路径                        | `--dataset data.csv`     |
+| `--datasets`  | `-D`  | 多个数据集 (逗号分隔)                      | `--datasets a.csv,b.csv` |
+| `--target`    | `-t`  | 真实标签列名                               | `--target class`         |
+| `--anomaly`   | `-a`  | 异常类别值 (逗号分隔)                      | `--anomaly "1,-1"`       |
+| `--output`    | `-o`  | 输出目录 (默认: `./output`)               | `--output ./results`     |
 
-> **Note:** Some algorithms accept `--dataset` (single dataset), others accept `--datasets` (multiple datasets, comma-separated).
+> **注意：** 部分算法使用 `--dataset` (单数据集)，其他使用 `--datasets` (多数据集，逗号分隔)。
 
 ---
 
-## Algorithm 1: ADFNR — Fuzzy Neighborhood Rough Set Anomaly Detection
+## 算法 1: ADFNR — 模糊邻域粗糙集异常检测
 
-- **File**: `ADFNR/detector.py`
-- **Mode**: Single dataset (`--dataset`)
-- **Additional Parameters**:
+- **文件**: `ADFNR/detector.py`
+- **模式**: 单数据集 (`--dataset`)
 
-| Parameter    | Type  | Description                         | Default |
-|--------------|-------|-------------------------------------|---------|
-| `--epsilon`  | float | Fuzzy neighborhood radius           | 0.5     |
+**额外参数**：
 
-**Usage Example**:
+| 参数         | 类型  | 描述               | 默认值 |
+|--------------|-------|--------------------|--------|
+| `--epsilon`  | float | 模糊邻域半径       | 0.5    |
+
+**使用示例**：
 ```bash
 python ADFNR/detector.py \
     --dataset datasets/iris.csv \
@@ -74,146 +73,19 @@ python ADFNR/detector.py \
 
 ---
 
-## Algorithm 2: GCN — Graph Convolutional Network Semi-Supervised Classification
+## 算法 2: DASOD — 双视角协同形式概念分析异常检测
 
-- **File**: `GCN/detector.py`
-- **Mode**: Multiple datasets (`--datasets`)
-- **Additional Parameters**:
+- **文件**: `DASOD/detector.py`
+- **模式**: 多数据集 (`--datasets`)
 
-| Parameter       | Type  | Description                                    | Default |
-|-----------------|-------|------------------------------------------------|---------|
-| `--k-neighbors` | int   | Number of neighbors for KNN graph construction | 15      |
-| `--hidden1`     | int   | First GCN hidden layer dimension               | 128     |
-| `--hidden2`     | int   | Second GCN embedding dimension                 | 64      |
-| `--epochs`      | int   | Number of training epochs                      | 200     |
-| `--lr`          | float | Learning rate                                  | 0.01    |
+**额外参数**：
 
-**Usage Example**:
-```bash
-python GCN/detector.py \
-    --datasets datasets/iris.csv,datasets/wine.csv \
-    --target class \
-    --anomaly "Iris-versicolor" \
-    --output ./output \
-    --k-neighbors 15 --hidden1 128 --hidden2 64 --epochs 200 --lr 0.01
-```
+| 参数              | 类型  | 描述                  | 默认值 |
+|-------------------|-------|-----------------------|--------|
+| `--K`             | int   | 离散化粒度            | 5      |
+| `--lambda-ratio`  | float | 核心概念选择比例      | 0.05   |
 
----
-
-## Algorithm 3: GCOD — Formal Concept Analysis + Granular Computing Anomaly Detection
-
-- **File**: `GCOD/detector.py`
-- **Mode**: Single dataset (`--dataset`)
-- **Additional Parameters**:
-
-| Parameter  | Type | Description                        | Default     |
-|------------|------|------------------------------------|-------------|
-| `--n-jobs` | int  | Number of parallel cores           | auto-detect |
-
-**Usage Example**:
-```bash
-python GCOD/detector.py \
-    -d datasets/adult.csv \
-    -t income \
-    -a ">50K" \
-    -o ./output_adult \
-    --n-jobs 4
-```
-
----
-
-## Algorithm 4: IE — Rough Set Information Entropy Anomaly Detection
-
-- **File**: `IE/detector.py`
-- **Mode**: Single dataset (`--dataset`)
-- **No additional parameters**
-
-**Usage Example**:
-```bash
-python IE/detector.py \
-    -d datasets/german.csv \
-    -t Class \
-    -a "2" \
-    -o ./output_german
-```
-
----
-
-## Algorithm 5: KNN — K-Nearest Neighbors Distance-Based Anomaly Detection
-
-- **File**: `KNN/detector.py`
-- **Mode**: Single dataset (`--dataset`)
-- **Additional Parameters**:
-
-| Parameter | Type | Description                    | Default |
-|-----------|------|--------------------------------|---------|
-| `--k`     | int  | Number of nearest neighbors    | 10      |
-
-**Usage Example**:
-```bash
-python KNN/detector.py \
-    -d datasets/glass.csv \
-    -t Type_of_glass \
-    -a "3,5,6" \
-    -o ./output_glass \
-    --k 15
-```
-
----
-
-## Algorithm 6: NIEOD — Neighborhood Information Entropy Anomaly Detection (Numba-optimized)
-
-- **File**: `NIEOD/detector.py`
-- **Mode**: Single dataset (`--dataset`)
-- **Additional Parameters**:
-
-| Parameter   | Type  | Description                              | Default |
-|-------------|-------|------------------------------------------|---------|
-| `--lambda`  | float | Neighborhood radius adjustment parameter | 1.0     |
-
-**Usage Example**:
-```bash
-python NIEOD/detector.py \
-    -d datasets/wine.csv \
-    -t class \
-    -a "3" \
-    -o ./output_wine \
-    --lambda 2.0
-```
-
----
-
-## Algorithm 7: NMIGOD — Neighborhood Mutual Information + GCN Semi-Supervised Anomaly Detection
-
-- **File**: `NMIGOD/detector.py`
-- **Mode**: Multiple datasets (`--datasets`)
-- **No additional CLI parameters** (algorithm hyperparameters are hardcoded internally)
-
-> Internal defaults: λ = 1.0, graph sparsification threshold d = 0.05, hidden dim = 64, epochs = 200, learning rate = 0.01.
-
-**Usage Example**:
-```bash
-python NMIGOD/detector.py \
-    -D datasets/iris.csv,datasets/bank.csv \
-    -t class \
-    -a "Iris-setosa" \
-    -o ./output
-```
-
----
-
-## Algorithm 8: DASOD — Dual-View Collaborative FCA Anomaly Detection
-
-- **File**: `DASOD/detector.py`
-- **Mode**: Multiple datasets (`--datasets`)
-- **Additional Parameters**:
-
-| Parameter       | Type  | Description                       | Default |
-|-----------------|-------|-----------------------------------|---------|
-| `--K`           | int   | Discretization granularity        | 5       |
-| `--lambda-ratio`| float | Core concept selection ratio      | 0.05    |
-
-**Usage Example**:
+**使用示例**：
 ```bash
 python DASOD/detector.py \
     -D datasets/adult.csv,datasets/german.csv \
@@ -225,43 +97,156 @@ python DASOD/detector.py \
 
 ---
 
-## Algorithm Quick Reference
+## 算法 3: GCN — 图卷积网络半监督异常检测
 
-| # | Algorithm | Mode | Extra Parameters |
-|---|-----------|------|------------------|
-| 1 | ADFNR     | Single (`-d`)  | `--epsilon` (0.5) |
-| 2 | GCN       | Multi (`-D`)   | `--k-neighbors` (15), `--hidden1` (128), `--hidden2` (64), `--epochs` (200), `--lr` (0.01) |
-| 3 | GCOD      | Single (`-d`)  | `--n-jobs` (auto) |
-| 4 | IE        | Single (`-d`)  | — |
-| 5 | KNN       | Single (`-d`)  | `--k` (10) |
-| 6 | NIEOD     | Single (`-d`)  | `--lambda` (1.0) |
-| 7 | NMIGOD    | Multi (`-D`)   | — (hardcoded) |
-| 8 | DASOD     | Multi (`-D`)   | `--K` (5), `--lambda-ratio` (0.05) |
+- **文件**: `GCN/detector.py`
+- **模式**: 多数据集 (`--datasets`)
 
----
+**额外参数**：
 
-## Tools (`tools/`)
+| 参数            | 类型  | 描述                      | 默认值 |
+|-----------------|-------|---------------------------|--------|
+| `--k-neighbors` | int   | KNN 图构建邻居数           | 15     |
+| `--hidden1`     | int   | GCN 第一层隐藏维度         | 128    |
+| `--hidden2`     | int   | GCN 第二层嵌入维度         | 64     |
+| `--epochs`      | int   | 训练轮数                   | 200    |
+| `--lr`          | float | 学习率                     | 0.01   |
 
-| Script | Description |
-|--------|-------------|
-| `run_all_datasets.py` | Batch-run all algorithms on all 25 datasets. Supports `--algo`, `--dataset`, `--cpu`, `--dry-run` flags. |
-| `batch_draw.py` | Batch-generate comparison charts (per-algorithm, per-dataset, summary). Supports `--dataset`, `--algo`, `--mode` filters. |
-| `collect_metrics.py` | Scan output directories and produce a summary table of Precision, Recall, F1, AUC across all algorithms × datasets. Supports `--base`, `--output`, `--best`. |
-| `collect_topk_metrics.py` | Scan output directories and produce a summary table of Top-K anomaly detection metrics across all algorithms × datasets. |
-| `collect_params.py` | Scan all detectors and extract default parameter values into a comparison table. |
-| `general_framework.py` | General anomaly detection framework template (multi-dataset mode). |
-| `image_draw_tool.py` | Draw ROC/Precision/Recall/F1 curves for a single algorithm–dataset pair. |
-| `csv_to_xlsx.py` | Convert CSV files to XLSX format (interactive). |
-| `xlsx_to_csv.py` | Convert XLSX files to CSV format (interactive). |
+> 内部固定参数：`labeled_ratio=0.2`, `random_state=42`, `dropout=0.5`, `weight_decay=5e-4`。
+
+**使用示例**：
+```bash
+python GCN/detector.py \
+    --datasets datasets/iris.csv,datasets/wine.csv \
+    --target class \
+    --anomaly "Iris-versicolor" \
+    --output ./output \
+    --k-neighbors 15 --hidden1 128 --hidden2 64 --epochs 200 --lr 0.01
+```
 
 ---
 
-## Datasets (`datasets/`)
+## 算法 4: GCN-LOF — GCN 嵌入 + LOF 混合异常检测
 
-25 benchmark datasets in CSV format:
+- **文件**: `GCN-LOF/detector.py`
+- **模式**: 多数据集 (`--datasets`)
 
-| Dataset | Target Column | Anomaly Value(s) |
-|---------|---------------|------------------|
+**额外参数**：
+
+| 参数                  | 类型        | 描述                      | 默认值   |
+|-----------------------|-------------|---------------------------|----------|
+| `--k-neighbors`       | int         | KNN 图构建邻居数           | 15       |
+| `--hidden1`           | int         | GCN 第一层隐藏维度         | 128      |
+| `--hidden2`           | int         | GCN 第二层嵌入维度         | 64       |
+| `--epochs`            | int         | 训练轮数                   | 200      |
+| `--lr`                | float       | 学习率                     | 0.01     |
+| `--lof-neighbors`     | int         | LOF 邻居数                 | 20       |
+| `--lof-contamination` | str / float | LOF 预期异常比例           | `'auto'` |
+
+> 内部固定参数：`labeled_ratio=0.2`, `random_state=42`, `dropout=0.5`, `weight_decay=5e-4`。
+
+**使用示例**：
+```bash
+python GCN-LOF/detector.py \
+    -D datasets/iris.csv,datasets/wine.csv \
+    -t class \
+    -a "Iris-versicolor" \
+    -o ./output \
+    --k-neighbors 15 --hidden1 128 --hidden2 64 --epochs 200 --lr 0.01 \
+    --lof-neighbors 20 --lof-contamination auto
+```
+
+---
+
+## 算法 5: NIEOD — 邻域信息熵异常检测 (Numba 加速)
+
+- **文件**: `NIEOD/detector.py`
+- **模式**: 单数据集 (`--dataset`)
+
+**额外参数**：
+
+| 参数        | 类型  | 描述                   | 默认值 |
+|-------------|-------|------------------------|--------|
+| `--lambda`  | float | 邻域半径调节参数       | 1.0    |
+
+**使用示例**：
+```bash
+python NIEOD/detector.py \
+    -d datasets/wine.csv \
+    -t class \
+    -a "3" \
+    -o ./output_wine \
+    --lambda 2.0
+```
+
+---
+
+## 算法 6: NMIGOD — 邻域互信息 + GCN 半监督异常检测
+
+- **文件**: `NMIGOD/detector.py`
+- **模式**: 多数据集 (`--datasets`)
+
+**额外参数**：
+
+| 参数              | 类型  | 描述                      | 默认值 |
+|-------------------|-------|---------------------------|--------|
+| `--lambda-param`  | float | 邻域半径系数              | 1.0    |
+| `--hidden1`       | int   | GCN 第一层隐藏维度         | 128    |
+| `--hidden2`       | int   | GCN 第二层嵌入维度         | 64     |
+| `--epochs`        | int   | 训练轮数                   | 200    |
+| `--lr`            | float | 学习率                     | 0.01   |
+| `--mi-threshold`  | float | 互信息稀疏化阈值           | 0.05   |
+
+> 内部固定参数：`labeled_ratio=0.2`, `random_state=42`, `dropout=0.5`, `weight_decay=5e-4`。
+
+**使用示例**：
+```bash
+python NMIGOD/detector.py \
+    -D datasets/iris.csv,datasets/bank.csv \
+    -t class \
+    -a "Iris-setosa" \
+    -o ./output \
+    --lambda-param 1.0 --mi-threshold 0.05 \
+    --hidden1 128 --hidden2 64 --epochs 200 --lr 0.01
+```
+
+---
+
+## 算法快速参考
+
+| # | 算法     | 模式            | 额外参数 |
+|---|----------|-----------------|----------|
+| 1 | ADFNR    | 单数据集 (`-d`) | `--epsilon` (0.5) |
+| 2 | DASOD    | 多数据集 (`-D`) | `--K` (5), `--lambda-ratio` (0.05) |
+| 3 | GCN      | 多数据集 (`-D`) | `--k-neighbors` (15), `--hidden1` (128), `--hidden2` (64), `--epochs` (200), `--lr` (0.01) |
+| 4 | GCN-LOF  | 多数据集 (`-D`) | 同 GCN + `--lof-neighbors` (20), `--lof-contamination` (auto) |
+| 5 | NIEOD    | 单数据集 (`-d`) | `--lambda` (1.0) |
+| 6 | NMIGOD   | 多数据集 (`-D`) | `--lambda-param` (1.0), `--hidden1` (128), `--hidden2` (64), `--epochs` (200), `--lr` (0.01), `--mi-threshold` (0.05) |
+
+---
+
+## 工具脚本 (`tools/`)
+
+| 脚本 | 描述 |
+|------|------|
+| `run_all_datasets.py` | 批量运行所有算法在所有 24 个数据集上的检测任务。支持 `--algo`, `--dataset`, `--cpu`, `--dry-run` 参数。 |
+| `batch_draw.py` | 批量生成对比图表（per-algorithm, per-dataset, summary）。支持 `--dataset`, `--algo`, `--mode`, `--type`, `-n` 参数。 |
+| `collect_metrics.py` | 扫描输出目录，生成所有算法 × 数据集的 Precision / Recall / F1 / AUC 汇总表。支持 `--base`, `--output`, `--best`, `--split`, `-n` 参数。 |
+| `collect_topk_metrics.py` | 扫描输出目录，生成所有算法 × 数据集的 Top-K 异常检测指标汇总表。 |
+| `collect_params.py` | 扫描所有检测器，提取默认参数值并生成对比表。支持 `--output`, `-n` 参数。 |
+| `general_framework.py` | 通用异常检测框架基类（多数据集模式）。各算法继承此类并重写 `train_model()` 和 `get_anomaly_scores()` 方法。 |
+| `image_draw_tool.py` | 交互式工具：为单个算法-数据集对绘制 Precision / Recall / F1 曲线和 ROC 曲线。 |
+| `csv_to_xlsx.py` | 交互式 CSV → XLSX 格式转换工具。 |
+| `xlsx_to_csv.py` | 交互式 XLSX → CSV 格式转换工具（支持单文件与批量文件夹模式）。 |
+
+---
+
+## 数据集 (`datasets/`)
+
+24 个基准数据集 (CSV 格式)：
+
+| 数据集 | 目标列 | 异常值 |
+|--------|--------|--------|
 | adult | income | >50K |
 | arrhythmia | C280 | 3,4,5,7,8,9,14,15 |
 | bank | y | yes |
@@ -289,42 +274,42 @@ python DASOD/detector.py \
 
 ---
 
-## Output Files
+## 输出文件
 
-After processing each dataset, the following files are generated in the output directory:
+每个数据集处理完成后，输出目录中会生成以下文件：
 
 - `metrics.csv` — Precision, Recall, F1-Score, AUC
-- `topk_metrics.csv` — Top-K anomaly detection metrics
-- `detection_results.csv` — Anomaly score and detection result for each sample
+- `topk_metrics.csv` — Top-K 异常检测指标
+- `detection_results.csv` — 每个样本的异常分数与检测结果
 
 ---
 
-## Batch Execution via `run_all_datasets.py`
+## 批量执行：`run_all_datasets.py`
 
 ```bash
-# Run all algorithms on all datasets
+# 运行所有算法在所有数据集上的检测
 python tools/run_all_datasets.py
 
-# Run a specific algorithm only
+# 仅运行指定算法
 python tools/run_all_datasets.py --algo ADFNR
 
-# Run on a specific dataset only
+# 仅运行指定数据集
 python tools/run_all_datasets.py --dataset iris
 
-# Force CPU (disable GPU)
+# 强制使用 CPU (禁用 GPU)
 python tools/run_all_datasets.py --cpu
 
-# Dry-run: print the execution plan without actually running
+# 试运行：仅打印执行计划，不实际运行
 python tools/run_all_datasets.py --dry-run
 ```
 
 ---
 
-## Batch Execution Script Example (Bash)
+## 批量执行脚本示例 (Bash)
 
 ```bash
 #!/bin/bash
-# Run ADFNR on all CSV files under datasets/
+# 在 datasets/ 下所有 CSV 文件上运行 ADFNR
 
 DATA_DIR="datasets"
 OUTPUT_BASE="./batch_results"
@@ -346,28 +331,35 @@ echo "All done!"
 
 ---
 
-## Batch Execution Script Example (Python)
+## 批量执行脚本示例 (Python)
 
 ```python
-import subprocess, os, glob
+import subprocess
+import os
+import glob
 
 datasets = glob.glob("datasets/*.csv")
 algorithms = {
-    "ADFNR":  ["ADFNR/detector.py", "--epsilon", "0.5"],
-    "IE":     ["IE/detector.py"],
-    "KNN":    ["KNN/detector.py", "--k", "10"],
-    "GCN":    ["GCN/detector.py"],
-    "NIEOD":  ["NIEOD/detector.py", "--lambda", "1.0"],
+    "ADFNR":   ["ADFNR/detector.py", "--epsilon", "0.5"],
+    "NIEOD":   ["NIEOD/detector.py", "--lambda", "1.0"],
+    "GCN":     ["GCN/detector.py"],
+    "GCN-LOF": ["GCN-LOF/detector.py"],
+    "NMIGOD":  ["NMIGOD/detector.py"],
+    "DASOD":   ["DASOD/detector.py", "--K", "5", "--lambda-ratio", "0.05"],
 }
 
 for algo_name, cmd_base in algorithms.items():
     for csv_path in datasets:
         name = os.path.splitext(os.path.basename(csv_path))[0]
         print(f"Running {algo_name} on {name}...")
+        # 根据算法模式选择 --dataset 或 --datasets
+        if algo_name in ("ADFNR", "NIEOD"):
+            mode_flag = "--dataset"
+        else:
+            mode_flag = "--datasets"
         cmd = [
             "python", cmd_base[0],
-            "--dataset" if "--datasets" not in cmd_base else "--datasets",
-            csv_path,
+            mode_flag, csv_path,
             "--target", "class",
             "--anomaly", "1",
             "--output", f"./batch_results/{algo_name}"
