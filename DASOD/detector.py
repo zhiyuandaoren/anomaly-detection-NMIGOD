@@ -407,7 +407,8 @@ class AnomalyDetectionFramework:
             sum_weight = 0.0
             for idx in concepts:
                 ext_size = len(extents[idx])
-                w = 1 - np.sqrt(ext_size / n_objects)
+                # 论文 Eq.12: W(X_j, B_j) = 1 - (|X_j| / |U|)^(1/3)
+                w = 1 - np.cbrt(ext_size / n_objects)
                 total += self.GOD_scores[idx] * w
                 sum_weight += w
             if sum_weight > 0:

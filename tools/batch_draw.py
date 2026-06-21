@@ -67,6 +67,7 @@ FIXED_COLORS = {
     'ADFNR':   '#1f77b4',  # 蓝色
     'DASOD':   '#ff7f0e',  # 橙色
     'GCN':     '#2ca02c',  # 绿色
+    'GCN-LOF': '#bcbd22',  # 黄绿色
     'GCOD':    '#9467bd',  # 紫色
     'IE':      '#8c564b',  # 棕色
     'KNN':     '#e377c2',  # 粉色

@@ -121,7 +121,8 @@ class AnomalyDetectionFramework:
         for j in prange(m):
             M = masks[j]  # (n, n) 布尔掩码
             size_n = np.sum(M, axis=1)
-            W = size_n / U_size  # Eq.16: 邻域概率权重 |n(x)|/|U|
+            # 论文 Eq.16: W(x) = √(|n(x)|/|U|)
+            W = np.sqrt(size_n / U_size)
 
             # --- Step 1: 查找唯一邻域模式及其频次 (O(n²) 原生实现) ---
             unique_counts = np.zeros(n, dtype=np.int64)
@@ -190,12 +191,15 @@ class AnomalyDetectionFramework:
             rnc = size_n - avg_size_minus
 
             # --- Step 6: 偏差度 NOD (Eq.14) ---
+            # 论文 Eq.14:
+            #   if RNC > 0: NOD = RNE * (|U| - |RNC|) / (2|U|)
+            #   if RNC <= 0: NOD = RNE * sqrt((|U| + |RNC|) / (2|U|))
             nod = np.zeros(n, dtype=np.float64)
             for i in range(n):
                 if rnc[i] > 0:
-                    nod[i] = rne[i] * (U_size - np.abs(rnc[i])) / (2 * U_size)
+                    nod[i] = rne[i] * (U_size - np.abs(rnc[i])) / (2.0 * U_size)
                 else:
-                    nod[i] = rne[i] * (np.sqrt(U_size) + np.abs(rnc[i])) / (2 * U_size)
+                    nod[i] = rne[i] * np.sqrt((U_size + np.abs(rnc[i])) / (2.0 * U_size))
 
             # --- Step 7: 累加加权 (Eq.15 前半部分) ---
             for i in range(n):
@@ -242,15 +246,15 @@ class AnomalyDetectionFramework:
                 epsilons[j] = 0.0
 
         # 3. 计算邻域掩码
-        print("⚡ 正在并行计算 HEOM 距离与邻域关系...")
+        print("[*] 正在并行计算 HEOM 距离与邻域关系...")
         masks = self._compute_distances_and_masks(X_num, X_cat, is_numeric, epsilons, n, m)
 
         # 4. 批量计算 NEOF
-        print("⚡ 正在并行计算邻域信息熵及异常因子 NEOF...")
+        print("[*] 正在并行计算邻域信息熵及异常因子 NEOF...")
         neof_scores = self._compute_neof_batch(masks, n, m)
 
         self.scores = neof_scores
-        print(f"✓ NIEOD异常分数计算完成 | 范围: [{self.scores.min():.4f}, {self.scores.max():.4f}]")
+        print(f"[OK] NIEOD异常分数计算完成 | 范围: [{self.scores.min():.4f}, {self.scores.max():.4f}]")
 
     def optimize_threshold(self):
         print("\n=== 阈值优化 === ")
