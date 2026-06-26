@@ -12,18 +12,18 @@
 
 输出目录结构:
     images/
-    ├── per_dataset/          # 每个数据集一份对比图（所有算法在同一图上）
-    │   ├── adult_precision_curve.png
-    │   ├── adult_recall_curve.png
-    │   ├── adult_f1_curve.png
-    │   ├── adult_roc_curve.png
+    ├── precision/            # 每个数据集一张 Precision 对比图
+    │   ├── adult_precision_curve.svg
     │   └── ...
-    ├── per_algo/             # 每个算法一份汇总图（所有数据集在同一图上）
-    │   ├── GCOD_roc_curve.png
+    ├── recall/               # 每个数据集一张 Recall 对比图
+    │   └── ...
+    ├── f1/                   # 每个数据集一张 F1 对比图
+    │   └── ...
+    ├── roc/                  # 每个数据集一张 ROC 对比图
     │   └── ...
     └── summary/              # 全局汇总图
-        ├── all_f1_curve.png
-        └── all_roc_curve.png
+        ├── all_f1_curve.svg
+        └── all_roc_curve.svg
 """
 
 import os
@@ -67,12 +67,9 @@ FIXED_COLORS = {
     'ADFNR':   '#1f77b4',  # 蓝色
     'DASOD':   '#ff7f0e',  # 橙色
     'GCN':     '#2ca02c',  # 绿色
-    'GCN-LOF': '#bcbd22',  # 黄绿色
-    'GCOD':    '#9467bd',  # 紫色
-    'IE':      '#8c564b',  # 棕色
-    'KNN':     '#e377c2',  # 粉色
+    'GCN-LOF': '#9467bd',  # 紫色
     'NIEOD':   '#17becf',  # 青色
-    'NMIGOD':  '#E31818',  # 红色
+    'NMIGOD':  '#E31818',  # 红色 — NMIGOD 固定红色, 加粗
 }
 # 后备颜色 (新算法且不在映射表中时使用)
 FALLBACK_COLORS = [
@@ -82,11 +79,10 @@ FALLBACK_COLORS = [
 ]
 
 
-def get_algo_color(algo_name, _color_idx=0, _algo_list=None):
+def get_algo_color(algo_name):
     """从固定配色表取颜色, NMIGOD=红色, 未知算法用后备色"""
     if algo_name in FIXED_COLORS:
         return FIXED_COLORS[algo_name]
-    # 后备: 按字母序分配颜色
     idx = hash(algo_name) % len(FALLBACK_COLORS)
     return FALLBACK_COLORS[idx]
 
@@ -157,13 +153,20 @@ def compute_metrics(scores, actuals):
 def draw_per_dataset(all_results, datasets, algos, mode='all'):
     """
     每个数据集一张图，图上包含所有算法的曲线。
-    输出到 images/per_dataset/ (SVG 矢量图)
-    注: NMIGOD 固定红色
+    按指标分类输出到 images/precision/ recall/ f1/ roc/ (SVG 矢量图)
+    NMIGOD 固定红色 #E31818 + 加粗, 其他算法颜色不冲突
     """
-    out_dir = IMAGES_ROOT / 'per_dataset'
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # 各指标输出子目录
+    metric_dirs = {
+        'precision': IMAGES_ROOT / 'precision',
+        'recall':    IMAGES_ROOT / 'recall',
+        'f1':        IMAGES_ROOT / 'f1',
+        'roc':       IMAGES_ROOT / 'roc',
+    }
+    for d in metric_dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
 
-    # 排序: NMIGOD 放最后以便图例醒目
+    # NMIGOD 排最后 (图例醒目), 其他按字母序
     sorted_algos = sorted(algos, key=lambda a: (0 if a != 'NMIGOD' else 1, a))
 
     for ds_name in datasets:
@@ -189,63 +192,68 @@ def draw_per_dataset(all_results, datasets, algos, mode='all'):
 
         # --- Precision / Recall / F1 曲线 (SVG) ---
         if mode in ('all', 'metrics'):
-            for key, label, fname in [
-                ('precision', 'Precision', f'{ds_name}_precision_curve.svg'),
-                ('recall', 'Recall', f'{ds_name}_recall_curve.svg'),
-                ('f1', 'F1-Score', f'{ds_name}_f1_curve.svg'),
+            for key, label, subdir in [
+                ('precision', 'Precision', 'precision'),
+                ('recall',    'Recall',    'recall'),
+                ('f1',        'F1-Score',  'f1'),
             ]:
                 fig, ax = plt.subplots(figsize=(10, 6))
 
-                for i, algo_name in enumerate(sorted_algos):
+                for algo_name in sorted_algos:
                     if algo_name not in ds_data:
                         continue
                     data = metrics_dict[algo_name][key]
                     k_vals = range(1, len(data) + 1)
-                    color = get_algo_color(algo_name, i, sorted_algos)
-                    lw = 2.5 if algo_name == 'NMIGOD' else 2
+                    color = get_algo_color(algo_name)
+                    lw = 2.8 if algo_name == 'NMIGOD' else 2.0
+                    marker = 's' if algo_name == 'NMIGOD' else 'o'
                     ax.plot(k_vals, data, label=algo_name,
                             color=color, linewidth=lw,
-                            marker='o', markersize=3,
+                            marker=marker, markersize=3,
                             markevery=max(1, len(data) // 40))
 
                 ax.set_xlabel('k (Threshold Index)', fontsize=12, fontweight='bold')
                 ax.set_ylabel(label, fontsize=12, fontweight='bold')
-                ax.set_title(f'{label} vs k - {ds_name}', fontsize=14, fontweight='bold')
+                ax.set_title(f'{label} vs k — {ds_name}', fontsize=14, fontweight='bold')
                 ax.legend(fontsize=9, loc='best', frameon=True)
                 ax.grid(True, linestyle='--', alpha=0.5)
                 ax.set_xlim(0, max(len(metrics_dict[a][key]) for a in ds_data))
                 ax.set_ylim(0, 1.05)
                 fig.tight_layout()
 
-                fig.savefig(out_dir / fname, format='svg', bbox_inches='tight')
+                fname = f'{ds_name}_{key}_curve.svg'
+                fig.savefig(metric_dirs[subdir] / fname, format='svg', bbox_inches='tight')
                 plt.close(fig)
 
         # --- ROC 曲线 (SVG) ---
         if mode in ('all', 'roc'):
             fig, ax = plt.subplots(figsize=(10, 8))
 
-            for i, algo_name in enumerate(sorted_algos):
+            for algo_name in sorted_algos:
                 if algo_name not in ds_data:
                     continue
                 scores, actuals = ds_data[algo_name]
                 fpr, tpr, _ = roc_curve(actuals, scores)
                 roc_auc = auc(fpr, tpr)
-                color = get_algo_color(algo_name, i, sorted_algos)
-                lw = 2.5 if algo_name == 'NMIGOD' else 2
+                color = get_algo_color(algo_name)
+                lw = 2.8 if algo_name == 'NMIGOD' else 2.0
+                marker = 's' if algo_name == 'NMIGOD' else 'o'
                 ax.plot(fpr, tpr, label=f'{algo_name} (AUC={roc_auc:.4f})',
-                        color=color, linewidth=lw)
+                        color=color, linewidth=lw,
+                        marker=marker, markersize=2,
+                        markevery=max(1, len(fpr) // 50))
 
             ax.plot([0, 1], [0, 1], 'k--', linewidth=1, alpha=0.5, label='Random')
             ax.set_xlabel('False Positive Rate', fontsize=12, fontweight='bold')
             ax.set_ylabel('True Positive Rate', fontsize=12, fontweight='bold')
-            ax.set_title(f'ROC Curve - {ds_name}', fontsize=14, fontweight='bold')
+            ax.set_title(f'ROC Curve — {ds_name}', fontsize=14, fontweight='bold')
             ax.legend(fontsize=8, loc='lower right', frameon=True)
             ax.grid(True, linestyle='--', alpha=0.5)
             ax.set_xlim([0.0, 1.0])
             ax.set_ylim([0.0, 1.05])
             fig.tight_layout()
 
-            fig.savefig(out_dir / f'{ds_name}_roc_curve.svg', format='svg', bbox_inches='tight')
+            fig.savefig(metric_dirs['roc'] / f'{ds_name}_roc_curve.svg', format='svg', bbox_inches='tight')
             plt.close(fig)
 
         print(" OK")
@@ -328,7 +336,7 @@ def draw_summary(all_results, datasets, algos, mode='all'):
             if count > 0:
                 mean_tpr = np.mean(all_tprs, axis=0)
                 mean_auc /= count
-                color = get_algo_color(algo, i, sorted_algos)
+                color = get_algo_color(algo)
                 lw = 3.0 if algo == 'NMIGOD' else 2.5
                 ax.plot(all_fprs[0], mean_tpr, label=f'{algo} (avg AUC={mean_auc:.4f}, {count} ds)',
                         color=color, linewidth=lw)
@@ -373,7 +381,7 @@ def draw_summary(all_results, datasets, algos, mode='all'):
                 padded = [f + [f[-1]] * (max_len - len(f)) for f in all_f1]
                 mean_f1 = np.mean(padded, axis=0)
                 k_vals = range(1, len(mean_f1) + 1)
-                color = get_algo_color(algo, i, sorted_algos)
+                color = get_algo_color(algo)
                 lw = 3.0 if algo == 'NMIGOD' else 2
                 ax.plot(k_vals, mean_f1, label=f'{algo} (avg over {count} ds)',
                         color=color, linewidth=lw)
@@ -419,8 +427,8 @@ def main():
                         choices=['all', 'metrics', 'roc'],
                         help='绘图模式: all=全部, metrics=P/R/F1曲线, roc=ROC曲线')
     parser.add_argument('--type', type=str, default='all',
-                        choices=['all', 'per_dataset', 'per_algo', 'summary'],
-                        help='图表类型: all=全部, per_dataset=数据集对比, per_algo=算法汇总, summary=全局汇总')
+                        choices=['all', 'per_dataset', 'summary'],
+                        help='图表类型: all=全部, per_dataset=数据集对比, summary=全局汇总')
     parser.add_argument('--no-interactive', '-n', action='store_true',
                         help='非交互模式')
     args = parser.parse_args()
@@ -475,19 +483,13 @@ def main():
 
     # 1. 每个数据集对比图
     if chart_type in ('all', 'per_dataset'):
-        print(f"\n--- 1/3 数据集对比图 (per_dataset) ---")
+        print(f"\n--- 1/2 数据集对比图 (per_dataset) ---")
         draw_per_dataset(all_results, datasets, algos, mode=plot_mode)
         print(f"  已保存至: {IMAGES_ROOT / 'per_dataset'}")
 
-    # 2. 每个算法汇总图
-    if chart_type in ('all', 'per_algo'):
-        print(f"\n--- 2/3 算法汇总图 (per_algo) ---")
-        draw_per_algo(all_results, datasets, algos, mode=plot_mode)
-        print(f"  已保存至: {IMAGES_ROOT / 'per_algo'}")
-
-    # 3. 全局汇总图
+    # 2. 全局汇总图
     if chart_type in ('all', 'summary'):
-        print(f"\n--- 3/3 全局汇总图 (summary) ---")
+        print(f"\n--- 2/2 全局汇总图 (summary) ---")
         draw_summary(all_results, datasets, algos, mode=plot_mode)
         print(f"  已保存至: {IMAGES_ROOT / 'summary'}")
 

@@ -103,7 +103,7 @@ def collect_all_metrics(algo_dirs):
 
 
 def build_multiindex_df(rows, algos):
-    """构建带多级列名的 DataFrame"""
+    """构建带多级列名的 DataFrame (含平均值行)"""
     data = {}
     for row in rows:
         ds = row['Dataset']
@@ -126,6 +126,14 @@ def build_multiindex_df(rows, algos):
     existing_cols = [(a, m) for a, m in columns if f'{a}_{m}' in df.columns]
     df = df[[f'{a}_{m}' for a, m in existing_cols]]
     df.columns = pd.MultiIndex.from_tuples(existing_cols)
+
+    # 添加各指标平均值行 (MultiIndex 用元组访问)
+    avg_vals = {}
+    for algo, metric in existing_cols:
+        vals = df[(algo, metric)].dropna()
+        avg_vals[(algo, metric)] = round(float(vals.mean()), 4) if len(vals) > 0 else None
+    df.loc['Average'] = avg_vals
+
     return df
 
 
@@ -162,7 +170,7 @@ def highlight_best(df):
 
 
 def save_separate_tables(rows, algos, output_dir):
-    """为每个指标生成独立的 CSV 文件，Dataset 为行, 算法为列"""
+    """为每个指标生成独立的 CSV 文件，Dataset 为行, 算法为列, 末尾附加平均值行"""
     metrics = ['Precision', 'Recall', 'F1-Score', 'AUC']
     filenames = ['precision.csv', 'recall.csv', 'f1_score.csv', 'auc.csv']
     base_path = Path(output_dir)
@@ -179,6 +187,13 @@ def save_separate_tables(rows, algos, output_dir):
         df = pd.DataFrame.from_dict(data, orient='index')
         df.index.name = 'Dataset'
         df = df[algos]  # 保持算法顺序一致
+
+        # 计算并添加各算法平均值行
+        avg_row = {}
+        for algo in algos:
+            vals = df[algo].dropna()
+            avg_row[algo] = round(vals.mean(), 4) if len(vals) > 0 else None
+        df.loc['Average'] = avg_row
 
         out_path = base_path / fname
         df.to_csv(out_path, encoding='utf-8-sig')
@@ -362,7 +377,7 @@ def interactive_main(base_path):
 
         # 平均指标
         print('-' * (22 + 13 * len(algos)))
-        print(f"{'[平均]':<22s}", end='')
+        print(f"{'Average':<22s}", end='')
         for algo in algos:
             vals = [row[f'{algo}_F1-Score'] for row in rows
                     if row.get(f'{algo}_F1-Score') is not None]
@@ -520,7 +535,7 @@ def main():
 
         # 平均指标
         print('-' * (22 + 13 * len(algos)))
-        print(f"{'[平均]':<22s}", end='')
+        print(f"{'Average':<22s}", end='')
         for algo in algos:
             vals = [row[f'{algo}_F1-Score'] for row in rows
                     if row.get(f'{algo}_F1-Score') is not None]

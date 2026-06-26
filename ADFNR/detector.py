@@ -7,7 +7,7 @@ from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_sco
 
 
 class AnomalyDetectionFramework:
-    def __init__(self):
+    def __init__(self, epsilon=0.5):
         self.df_raw = None
         self.df_processed = None
         self.feature_columns = []
@@ -18,6 +18,7 @@ class AnomalyDetectionFramework:
         self.scores = None
         self.results_df = None
         self.best_threshold = None
+        self.epsilon = epsilon
         self.output_folder = "./output"
         self.epsilon = 0.5  # ADFNR 核心参数：模糊邻域半径
         self.numerical_mask = []  # 记录哪些列是数值型

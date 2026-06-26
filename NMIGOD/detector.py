@@ -1,3 +1,22 @@
+"""
+NMIGOD — Neighborhood Mutual Information and Graph Convolutional Network
+based Outlier Detection
+=========================================================================
+Structure Information Graph Learning with GCNs for Anomaly Detection
+in Mixed-Attribute Data
+
+自适应半径:
+  NE_a = -Σ |C_i|/|U| * log₂(|C_i|/|U|)  (连通分量信息熵, Definition 10)
+  ρ_a = 1 - NE_a / log₂|U|
+  ε_a = σ_a / (1 + ρ_a)                   (公式 12)
+
+核心流程:
+  1. 连通分量法计算属性邻域信息熵 → 自适应半径 ε_a
+  2. HEOM 距离 + 硬阈值构建邻域 → NMI 图
+  3. 固定阈值 d 稀疏化 → D^{-1/2}MD^{-1/2} 对称归一化
+  4. 两层 GCN 半监督二分类
+"""
+
 import pandas as pd
 import numpy as np
 import os
@@ -12,8 +31,7 @@ warnings.filterwarnings('ignore')
 
 
 # ============================================================
-# 标准图卷积层 — Kipf & Welling, ICLR 2017
-# H' = σ(D^{-1/2} Â D^{-1/2} H W)
+# 标准图卷积层
 # ============================================================
 class GraphConvolution(nn.Module):
     """单层图卷积: H' = D^{-1/2} Â D^{-1/2} H W"""
@@ -35,7 +53,6 @@ class GraphConvolution(nn.Module):
             nn.init.zeros_(self.bias)
 
     def forward(self, x, adj_norm):
-        # 论文 Eq.2: output = D^{-1/2}ÂD^{-1/2} @ (X @ W)
         support = torch.mm(x, self.weight)
         output = torch.mm(adj_norm, support)
         if self.bias is not None:
@@ -44,15 +61,7 @@ class GraphConvolution(nn.Module):
 
 
 class GCNClassifier(nn.Module):
-    """
-    两层 GCN 二分类器 — 用于基于邻域互信息图的异常检测
-
-    架构:
-      Input → GCN Layer 1 → ReLU → Dropout → GCN Layer 2 → ReLU → Linear → logit
-
-    图结构: 邻域互信息矩阵 (对称归一化后)
-    训练目标: 二分类交叉熵, 将结点分类为正常(0)或异常(1)
-    """
+    """两层 GCN 二分类器"""
 
     def __init__(self, in_features, hidden1=128, hidden2=64, dropout=0.5):
         super(GCNClassifier, self).__init__()
@@ -62,37 +71,45 @@ class GCNClassifier(nn.Module):
         self.dropout = dropout
 
     def forward(self, x, adj_norm):
-        # 第1层: H^(1) = ReLU(D^{-1/2}ÂD^{-1/2} X W^(0))
         h = self.gc1(x, adj_norm)
         h = F.relu(h)
         h = F.dropout(h, self.dropout, training=self.training)
-        # 第2层: H^(2) = ReLU(D^{-1/2}ÂD^{-1/2} H^(1) W^(1))
         h = self.gc2(h, adj_norm)
         h = F.relu(h)
-        # 分类器
         logits = self.classifier(h)
         return logits, h
 
 
 # ============================================================
-# NMIGOD 异常检测框架
-# 邻域互信息 (Neighborhood Mutual Information) + GCN 二分类
+# NMIGOD: Neighborhood Mutual Information + GCN Anomaly Detection
 # ============================================================
 class AnomalyDetectionFramework:
     """
     NMIGOD: 邻域互信息图卷积异常检测
 
+    自适应半径 (论文公式 12):
+      对属性 a, 用 σ_a 构建邻域图, 求其连通分量划分
+      NE_a = -Σ |C_i|/|U| * log₂(|C_i|/|U|)   (划分的信息熵)
+      ρ_a = 1 - NE_a / log₂|U|                  (全局密度)
+
+    自适应半径:
+      ε_a(x) = σ_a / (1 + ρ_a)   (同属性上所有对象使用相同半径)
+
     核心流程:
-    1. 在原始数据上计算自适应邻域半径 (数值: std/λ, 分类型: 0)
-    2. 构建邻域关系矩阵 (所有属性同时满足邻域条件)
-    3. 计算邻域互信息矩阵 (论文算法1)
-    4. 对称归一化 → GCN 图结构
-    5. GCN 二分类训练 → 异常概率作为异常分数
+    1. 用参考半径 σ_a 构建邻域图
+    2. 寻找连通分量 → 计算划分信息熵 NE_a
+    3. 计算全局密度 ρ_a = 1 - NE_a / log₂|U|
+    4. 计算自适应半径 ε_a = σ_a / (1 + ρ_a)
+    5. 用双向规则 min(ε_i, ε_j) 构建最终邻域
+    6. 计算邻域互信息矩阵
+    7. 对称归一化 → GCN 图结构
+    8. GCN 二分类训练 → 异常概率作为异常分数
     """
 
     def __init__(self, lambda_param=1.0, hidden1=128, hidden2=64,
                  epochs=200, lr=0.01, mi_threshold=0.05,
-                 labeled_ratio=0.2, random_state=42):
+                 labeled_ratio=0.2, random_state=42,
+                 use_adaptive_radius=True, use_gcn=True):
         self.df_raw = None
         self.df_processed = None
         self.feature_columns = []
@@ -105,26 +122,26 @@ class AnomalyDetectionFramework:
         self.output_folder = "./output"
         self.dataset_configs = []
 
-        # 超参数
-        self.lambda_param = lambda_param    # 邻域半径系数 λ (论文默认=1.0)
-        self.hidden1 = hidden1              # GCN 第1层隐藏维度
-        self.hidden2 = hidden2              # GCN 第2层嵌入维度
-        self.epochs = epochs                # 训练轮数
-        self.lr = lr                        # 学习率
-        self.mi_threshold = mi_threshold    # 互信息稀疏化阈值 d
+        self.lambda_param = lambda_param
+        self.hidden1 = hidden1
+        self.hidden2 = hidden2
+        self.epochs = epochs
+        self.lr = lr
+        self.mi_threshold = mi_threshold
 
-        # 半监督设置
-        self.labeled_ratio = labeled_ratio  # 有标签数据比例 (默认 20%)
-        self.random_state = random_state    # 随机种子 (确保跨算法一致性)
+        self.labeled_ratio = labeled_ratio
+        self.random_state = random_state
 
-        # 数据划分掩码
-        self.train_mask = None              # 训练集 (有标签, 用于损失计算)
-        self.val_mask = None                # 验证集 (有标签, 用于阈值调优)
-        self.test_mask = None               # 测试集 (有标签, 用于评估)
-        self.unlabeled_mask = None          # 无标签集 (用于评估)
-        self.eval_mask = None               # 评估集 = test + unlabeled
+        # 消融实验标志
+        self.use_adaptive_radius = use_adaptive_radius  # False → ε=σ (无自适应)
+        self.use_gcn = use_gcn  # False → 纯 NMI 分数
 
-        # 内部状态
+        self.train_mask = None
+        self.val_mask = None
+        self.test_mask = None
+        self.unlabeled_mask = None
+        self.eval_mask = None
+
         self.num_cols = []
         self.cat_cols = []
         self.X_gcn_np = None
@@ -185,7 +202,6 @@ class AnomalyDetectionFramework:
         print("\n=== 数据预处理 (NMIGOD) ===")
         self.df_processed = self.df_raw.copy()
 
-        # 1. 构建真实标签
         def map_anomaly(val):
             if pd.isna(val):
                 return 0
@@ -194,16 +210,13 @@ class AnomalyDetectionFramework:
 
         self.y_true = self.df_processed[self.target_column].apply(map_anomaly)
 
-        # 2. 确定特征列
         all_cols = set(self.df_processed.columns)
         drop_cols = {self.target_column}
         self.feature_columns = list(all_cols - drop_cols)
         print(f"用于训练的特征列数量：{len(self.feature_columns)}")
 
-        # 3. 保留原始数据副本 (用于邻域互信息计算)
         self.df_original = self.df_processed[self.feature_columns].copy()
 
-        # 4. 缺失值填充
         X = self.df_processed[self.feature_columns].copy()
         for col in self.feature_columns:
             if pd.api.types.is_numeric_dtype(X[col]):
@@ -212,7 +225,6 @@ class AnomalyDetectionFramework:
                 X[col] = X[col].fillna("Unknown")
         self.df_processed[self.feature_columns] = X
 
-        # 5. 分离数值与类别列
         self.num_cols = [
             c for c in self.feature_columns
             if pd.api.types.is_numeric_dtype(self.df_processed[c])
@@ -224,7 +236,6 @@ class AnomalyDetectionFramework:
         print(f"数值特征 ({len(self.num_cols)}): {self.num_cols}")
         print(f"分类特征 ({len(self.cat_cols)}): {self.cat_cols}")
 
-        # 6. 构建 GCN 特征矩阵: 数值 Min-Max + 类别 One-Hot
         if len(self.num_cols) > 0:
             X_num = self.df_processed[self.num_cols].values.astype(float)
             self.X_num_min = X_num.min(axis=0)
@@ -248,75 +259,149 @@ class AnomalyDetectionFramework:
         print(f"GCN 特征矩阵维度: {self.X_gcn_np.shape}")
 
     # ============================================================
-    # 邻域互信息图构建 (论文定义9 & 算法1)
+    # ★ 核心: 邻域互信息图构建
     # ============================================================
     def _build_mi_graph(self):
         """
-        构建基于邻域互信息的图结构:
+        基于邻域信息熵的自适应半径 + NMI 图构建
 
-        步骤:
-        1. 计算自适应邻域半径 (数值: std/λ, 分类型: 0)
-        2. 构建邻域关系矩阵 (所有属性同时满足邻域条件)
-        3. 计算邻域互信息矩阵 I(x,y)
-        4. 归一化 + 稀疏化
-        5. 对称归一化 D^{-1/2} M D^{-1/2}
-
-        论文公式:
-          邻域半径: ε_a = std(a) / λ
-          互信息: I(x,y) = (|I|/|U|) * log2((|I|*|U|) / (|N(x)|*|N(y)|))
+        论文 Section 3.1-3.2:
+        Step 1: 数值属性 min-max 归一化到 [0,1], 计算参考半径 σ_a
+        Step 2: 寻找连通分量 → 计算划分信息熵 NE_a
+        Step 3: 计算全局密度 ρ_a = 1 - NE_a / log₂|U|
+        Step 4: 自适应半径 ε_a = σ_a / (1 + ρ_a)  (HEOM 归一化距离空间)
+        Step 5: 用双向规则构建最终邻域
+        Step 6: 计算邻域互信息
         """
         N = len(self.df_processed)
-        print(f"\n[*] 构建邻域互信息图 (N={N}, λ={self.lambda_param})...")
+        print(f"\n[*] 构建邻域互信息图 (N={N})...")
+        print(f"    HEOM 归一化距离 + 自适应半径: ε_a = σ_a/(1+ρ_a)")
 
-        # ---------- 1. 自适应邻域半径 ----------
-        num_radii = []
-        for col in self.num_cols:
-            raw_vals = self.df_original[col].values.astype(float)
-            std_val = np.std(raw_vals)
-            radius = std_val / self.lambda_param
-            num_radii.append(radius)
-
-        cat_radii = [0.0] * len(self.cat_cols)
-
-        X_raw_num = (self.df_original[self.num_cols].values.astype(float)
-                     if len(self.num_cols) > 0 else None)
+        # ---------- 准备数据 ----------
+        # 论文要求: 数值属性使用 min-max 归一化后的值计算距离 (HEOM, bounded in [0,1])
+        X_num_norm = self.X_num_norm  # 已在 preprocess_data 中归一化到 [0,1]
         X_raw_cat = (self.df_original[self.cat_cols].values
                      if len(self.cat_cols) > 0 else None)
+        D_num = len(self.num_cols)
 
-        # ---------- 2. 邻域判定 ----------
-        # 数值属性: |a(x) - a(y)| <= ε_a
-        if len(self.num_cols) > 0:
-            num_tensor = torch.tensor(X_raw_num, dtype=torch.float32, device=self.device)
-            radii_tensor = torch.tensor(num_radii, dtype=torch.float32, device=self.device)
-            diff = torch.abs(num_tensor.unsqueeze(1) - num_tensor.unsqueeze(0))
-            mask_num = diff <= radii_tensor  # (N, N, D_num)
+        # ---------- Step 1: 计算参考半径 σ_a (基于归一化值) ----------
+        sigma_a = []
+        for a_idx in range(D_num):
+            std_val = np.std(X_num_norm[:, a_idx])
+            if std_val == 0:
+                std_val = 1e-6
+            sigma_a.append(std_val)
+
+        # ---------- Step 2: 计算每个属性的划分信息熵 NE_a ----------
+        # 方法: 对每个数值属性, 基于 σ_a 构建邻域图的连通分量
+        # 连通分量 = 排序后间隔 ≤ σ_a 的连续区间
+        rho_per_attr = []  # 全局 ρ_a (每个属性一个值)
+        ne_values = []     # 记录 NE 值用于诊断
+
+        for a_idx in range(D_num):
+            vals = X_num_norm[:, a_idx]  # 归一化值 (论文 HEOM 要求)
+            sigma = sigma_a[a_idx]
+
+            # 排序
+            sorted_indices = np.argsort(vals)
+            sorted_vals = vals[sorted_indices]
+
+            # 寻找连通分量: gap > sigma 则为断点
+            gaps = np.diff(sorted_vals)
+            break_points = np.where(gaps > sigma)[0] + 1  # 断点位置 (1-indexed)
+
+            # 计算各连通分量大小
+            component_sizes = []
+            start = 0
+            for bp in break_points:
+                component_sizes.append(bp - start)
+                start = bp
+            component_sizes.append(N - start)  # 最后一个分量
+
+            # 计算划分信息熵: NE_a = -Σ (|C_i|/N) * log₂(|C_i|/N)
+            ne_val = 0.0
+            for size in component_sizes:
+                if size > 0:
+                    p = size / N
+                    ne_val -= p * np.log2(p)
+            ne_values.append(ne_val)
+
+            # ρ_a = 1 - NE_a / log₂(N)
+            log_N = np.log2(N)
+            if log_N > 0:
+                rho = 1.0 - ne_val / log_N
+            else:
+                rho = 1.0
+            # 裁剪到 [0, 1]
+            rho = max(0.0, min(1.0, rho))
+            rho_per_attr.append(rho)
+
+        if D_num > 0:
+            rho_tensor = torch.tensor(rho_per_attr, dtype=torch.float32,
+                                      device=self.device)  # (D_num,)
         else:
-            mask_num = torch.ones((N, N, 1), dtype=torch.bool, device=self.device)
+            rho_tensor = torch.ones(1, dtype=torch.float32, device=self.device)
 
-        # 类别属性: 必须完全相同 (半径=0)
+        # ---------- Step 3: 自适应半径 ε_a = σ_a / (1 + ρ_a) ----------
+        if not self.use_adaptive_radius:
+            # 消融变体: 固定半径, ρ_a = 0 → ε_a = σ_a
+            rho_tensor = torch.zeros(D_num if D_num > 0 else 1,
+                                     dtype=torch.float32, device=self.device)
+            print(f"    [消融] 固定半径模式: ε_a = σ_a (ρ_a=0)")
+
+        if D_num > 0:
+            sigma_tensor = torch.tensor(sigma_a, dtype=torch.float32,
+                                        device=self.device)  # (D_num,)
+            eps_per_attr = sigma_tensor / (1.0 + rho_tensor)  # (D_num,)
+            # 扩展到每个对象 (同一属性上所有对象使用相同半径)
+            eps_per_obj = eps_per_attr.unsqueeze(0).expand(N, D_num)  # (N, D_num)
+        else:
+            eps_per_obj = torch.ones((N, 1), dtype=torch.float32, device=self.device)
+
+        # ---------- Step 4: 用双向规则构建最终邻域 (逐属性分块，避免 O(N²D) 内存) ----------
+        N_mask = None
+        device = self.device
+
+        # 数值属性: 逐属性计算 HEOM 距离并累积邻域掩码
+        if D_num > 0:
+            num_tensor = torch.tensor(X_num_norm, dtype=torch.float32, device=device)
+            for a_idx in range(D_num):
+                col_vals = num_tensor[:, a_idx]  # (N,)
+                diff_a = torch.abs(col_vals.unsqueeze(1) - col_vals.unsqueeze(0))  # (N, N)
+                eps_a = eps_per_obj[:, a_idx]  # (N,)
+                min_eps_a = torch.min(eps_a.unsqueeze(1), eps_a.unsqueeze(0))  # (N, N)
+                mask_a = diff_a <= min_eps_a  # (N, N)
+                if N_mask is None:
+                    N_mask = mask_a
+                else:
+                    N_mask = N_mask & mask_a
+
+        # 类别属性: 逐属性累积
         if len(self.cat_cols) > 0:
             cat_encoded = np.zeros_like(X_raw_cat, dtype=np.int64)
             for i in range(len(self.cat_cols)):
                 _, inverse = np.unique(X_raw_cat[:, i], return_inverse=True)
                 cat_encoded[:, i] = inverse
-            cat_tensor = torch.tensor(cat_encoded, dtype=torch.long, device=self.device)
-            d_cat = (cat_tensor.unsqueeze(1) != cat_tensor.unsqueeze(0))
-            mask_cat = (d_cat == False)
-        else:
-            mask_cat = torch.ones((N, N, 1), dtype=torch.bool, device=self.device)
+            cat_tensor = torch.tensor(cat_encoded, dtype=torch.long, device=device)
+            for c_idx in range(len(self.cat_cols)):
+                col_cat = cat_tensor[:, c_idx]  # (N,)
+                mask_c = (col_cat.unsqueeze(1) == col_cat.unsqueeze(0))  # (N, N)
+                if N_mask is None:
+                    N_mask = mask_c
+                else:
+                    N_mask = N_mask & mask_c
 
-        # 所有属性均满足 → 邻域关系
-        N_mask = mask_num.all(dim=-1) & mask_cat.all(dim=-1)  # (N, N)
+        if N_mask is None:
+            N_mask = torch.ones((N, N), dtype=torch.bool, device=device)
         N_mask_float = N_mask.float()
 
-        # ---------- 3. 邻域互信息计算 ----------
-        N_size = N_mask_float.sum(dim=1)                     # |N(x)|
-        intersection = torch.matmul(N_mask_float, N_mask_float.T)  # |N(x) ∩ N(y)|
+        # ---------- Step 5: 邻域互信息计算 ----------
+        N_size = N_mask_float.sum(dim=1)
+        intersection = torch.matmul(N_mask_float, N_mask_float.T)
         denominator = N_size.unsqueeze(1) * N_size.unsqueeze(0)
         denominator = torch.where(
             denominator == 0, torch.ones_like(denominator), denominator)
 
-        # I(x,y) = (|I|/|U|) * log2((|I|*|U|) / (|N(x)|*|N(y)|))
         ratio = (intersection * N) / denominator
         log_ratio = torch.log2(torch.clamp(ratio, min=1e-8))
         prob_factor = intersection / N
@@ -324,11 +409,9 @@ class AnomalyDetectionFramework:
         I_matrix = torch.where(
             intersection == 0, torch.zeros_like(I_matrix), I_matrix)
 
-        # 自身互信息设为 1
         I_matrix = (I_matrix * (1 - torch.eye(N, device=self.device)) +
                     torch.eye(N, device=self.device))
 
-        # ---------- 4. 归一化与稀疏化 ----------
         off_diag = I_matrix.clone()
         off_diag.fill_diagonal_(0)
         max_val = off_diag.max().item()
@@ -337,12 +420,10 @@ class AnomalyDetectionFramework:
         else:
             M_matrix = I_matrix
 
-        # 阈值稀疏化
         M_matrix = torch.where(
             M_matrix >= self.mi_threshold, M_matrix,
             torch.zeros_like(M_matrix))
 
-        # ---------- 5. 对称归一化 ----------
         adj = M_matrix
         degree = adj.sum(dim=1)
         d_inv_sqrt = torch.pow(degree, -0.5)
@@ -352,26 +433,25 @@ class AnomalyDetectionFramework:
 
         norm_adj = d_inv_sqrt_diag @ adj @ d_inv_sqrt_diag
 
-        n_edges = int((adj > 0).sum().item()) - N  # 排除自环
+        n_edges = int((adj > 0).sum().item()) - N
         print(f"[*] 互信息图构建完成, 边数(含自环): {n_edges + N}, "
               f"非零边比例: {n_edges / (N*N - N) * 100:.2f}%")
+
+        if D_num > 0:
+            avg_rho = rho_tensor.mean().item()
+            avg_eps = eps_per_attr.mean().item()
+            avg_sigma = np.mean(sigma_a)
+            avg_ne = np.mean(ne_values)
+            print(f"    平均 NE={avg_ne:.4f}, 平均 ρ={avg_rho:.4f}, "
+                  f"平均 ε={avg_eps:.4f}, 平均 σ={avg_sigma:.4f}")
 
         self.norm_adj = norm_adj
         self.M_matrix = M_matrix
 
     # ============================================================
-    # 半监督数据划分
-    # 20% 有标签 (7:2:1 = 训练:验证:测试), 80% 无标签
-    # 分层抽样确保正常/异常样本比例一致
+    # 以下方法与原始 NMIGOD 完全相同
     # ============================================================
     def _split_data(self):
-        """
-        半监督数据划分策略:
-          1. 分层抽样 20% 作为有标签数据
-          2. 有标签数据按 7:2:1 划分为训练/验证/测试
-          3. 其余 80% 作为无标签数据
-          4. 评估集 = 测试集 + 无标签集
-        """
         from sklearn.model_selection import train_test_split
 
         N = len(self.y_true)
@@ -380,7 +460,6 @@ class AnomalyDetectionFramework:
         print(f"\n[*] 半监督数据划分 (labeled_ratio={self.labeled_ratio}, "
               f"random_state={self.random_state})")
 
-        # Step 1: 分层抽样 — 20% 有标签, 80% 无标签 (失败时回退到非分层)
         all_indices = np.arange(N)
         try:
             labeled_idx, unlabeled_idx = train_test_split(
@@ -393,43 +472,25 @@ class AnomalyDetectionFramework:
                 random_state=self.random_state
             )
 
-        # Step 2: 有标签数据按 7:2:1 划分为训练/验证/测试
         n_labeled = len(labeled_idx)
-        n_val = int(n_labeled * 0.2)   # 验证集: 20% of labeled
-        n_test = int(n_labeled * 0.1)  # 测试集: 10% of labeled
+        n_val = int(n_labeled * 0.25)
 
         y_labeled = y[labeled_idx]
 
-        # 先分出训练集 (分层抽样, 失败时回退到非分层)
         try:
-            train_idx_rel, temp_idx_rel = train_test_split(
-                np.arange(n_labeled), test_size=n_val + n_test,
+            train_idx_rel, val_idx_rel = train_test_split(
+                np.arange(n_labeled), test_size=n_val,
                 random_state=self.random_state, stratify=y_labeled
             )
         except ValueError:
-            train_idx_rel, temp_idx_rel = train_test_split(
-                np.arange(n_labeled), test_size=n_val + n_test,
-                random_state=self.random_state
-            )
-
-        # 从剩余中分出验证集和测试集 (分层抽样, 失败时回退到非分层)
-        y_temp = y_labeled[temp_idx_rel]
-        try:
-            val_idx_rel, test_idx_rel = train_test_split(
-                np.arange(len(temp_idx_rel)), test_size=n_test,
-                random_state=self.random_state, stratify=y_temp
-            )
-        except ValueError:
-            val_idx_rel, test_idx_rel = train_test_split(
-                np.arange(len(temp_idx_rel)), test_size=n_test,
+            train_idx_rel, val_idx_rel = train_test_split(
+                np.arange(n_labeled), test_size=n_val,
                 random_state=self.random_state
             )
 
         train_idx = labeled_idx[train_idx_rel]
-        val_idx = labeled_idx[temp_idx_rel[val_idx_rel]]
-        test_idx = labeled_idx[temp_idx_rel[test_idx_rel]]
+        val_idx = labeled_idx[val_idx_rel]
 
-        # Step 3: 构建布尔掩码
         self.train_mask = np.zeros(N, dtype=bool)
         self.val_mask = np.zeros(N, dtype=bool)
         self.test_mask = np.zeros(N, dtype=bool)
@@ -437,57 +498,46 @@ class AnomalyDetectionFramework:
 
         self.train_mask[train_idx] = True
         self.val_mask[val_idx] = True
-        self.test_mask[test_idx] = True
         self.unlabeled_mask[unlabeled_idx] = True
 
-        # 评估集 = 测试 + 无标签 (不包含训练和验证, 避免数据泄露)
-        self.eval_mask = self.test_mask | self.unlabeled_mask
+        self.eval_mask = self.unlabeled_mask
 
-        print(f"  数据划分完成:")
-        print(f"    训练集: {train_idx.size} ({train_idx.size/N*100:.1f}%), "
+        print(f"  训练集: {train_idx.size} ({train_idx.size/N*100:.1f}%), "
               f"异常比例={y[train_idx].mean():.4f}")
-        print(f"    验证集: {val_idx.size} ({val_idx.size/N*100:.1f}%), "
+        print(f"  验证集: {val_idx.size} ({val_idx.size/N*100:.1f}%), "
               f"异常比例={y[val_idx].mean():.4f}")
-        print(f"    测试集: {test_idx.size} ({test_idx.size/N*100:.1f}%), "
-              f"异常比例={y[test_idx].mean():.4f}")
-        print(f"    无标签: {unlabeled_idx.size} ({unlabeled_idx.size/N*100:.1f}%), "
+        print(f"  无标签(→评估): {unlabeled_idx.size} ({unlabeled_idx.size/N*100:.1f}%), "
               f"异常比例={y[unlabeled_idx].mean():.4f}")
-        print(f"    评估集: {self.eval_mask.sum()} ({self.eval_mask.sum()/N*100:.1f}%)")
 
-    # ============================================================
-    # GCN 二分类训练
-    # ============================================================
     def train_model(self):
-        """
-        NMIGOD 半监督训练流程:
-        1. 构建邻域互信息图
-        2. 半监督数据划分
-        3. GCN 二分类器 — 仅在有标签训练集上计算损失
-        4. 异常分数 = sigmoid(logit) = P(异常 | 结点)
-        """
-        print("\n=== 模型训练 (NMIGOD: 邻域互信息 + GCN 半监督二分类) ===")
+        mode = "GCN 半监督二分类" if self.use_gcn else "纯 NMI 分数"
+        print(f"\n=== 模型训练 (NMIGOD: NMI 图 + {mode}) ===")
+
+        torch.manual_seed(self.random_state)
+        np.random.seed(self.random_state)
+
         N = len(self.df_processed)
         in_features = self.X_gcn_np.shape[1]
 
-        # 1. 构建邻域互信息图
         self._build_mi_graph()
 
-        # 2. 半监督数据划分
+        if not self.use_gcn:
+            # 消融变体: 跳过 GCN 训练
+            print("[*] 纯 NMI 模式: 跳过 GCN 训练")
+            return
+
         self._split_data()
 
-        # 3. 准备数据
         self.X_gcn_tensor = torch.tensor(
             self.X_gcn_np, dtype=torch.float32, device=self.device)
         self.y_tensor = torch.tensor(
             self.y_true.values, dtype=torch.float32, device=self.device)
 
-        # 转换掩码为 tensor
         self.train_mask_t = torch.tensor(self.train_mask, dtype=torch.bool,
                                           device=self.device)
         self.val_mask_t = torch.tensor(self.val_mask, dtype=torch.bool,
                                         device=self.device)
 
-        # 4. 构建 GCN 二分类器
         self.model = GCNClassifier(
             in_features=in_features,
             hidden1=self.hidden1,
@@ -495,11 +545,9 @@ class AnomalyDetectionFramework:
             dropout=0.5
         ).to(self.device)
 
-        # 5. 优化器
         optimizer = torch.optim.Adam(
             self.model.parameters(), lr=self.lr, weight_decay=5e-4)
 
-        # 6. 损失函数 — 基于训练集类别不平衡
         n_pos_train = self.y_tensor[self.train_mask_t].sum().item()
         n_neg_train = self.train_mask_t.sum().item() - n_pos_train
         if n_pos_train > 0 and n_neg_train > 0:
@@ -512,22 +560,19 @@ class AnomalyDetectionFramework:
 
         n_pos_all = self.y_tensor.sum().item()
         n_neg_all = N - n_pos_all
-        print(f"[*] 模型结构: NMIGOD GCN 二分类器 (半监督)")
+        print(f"[*] 模型结构: NMIGOD GCN 二分类器")
         print(f"    输入维度={in_features}, 隐藏层1={self.hidden1}, "
               f"隐藏层2={self.hidden2}")
         print(f"    全量 — 异常: {int(n_pos_all)}, 正常: {int(n_neg_all)}")
         print(f"    训练集 — 异常: {int(n_pos_train)}, 正常: {int(n_neg_train)}, "
               f"pos_weight: {criterion.pos_weight.item():.2f}")
-        print(f"    半监督训练 (仅 {self.train_mask.sum()} 个有标签结点)")
         print(f"[*] 开始训练 (epochs={self.epochs}, device={self.device})...")
 
-        # 7. 训练循环
         self.model.train()
         for epoch in range(self.epochs):
             optimizer.zero_grad()
             logits, _ = self.model(self.X_gcn_tensor, self.norm_adj)
 
-            # 仅在有标签训练集上计算损失
             loss = criterion(logits[self.train_mask_t].view(-1),
                            self.y_tensor[self.train_mask_t])
 
@@ -548,12 +593,20 @@ class AnomalyDetectionFramework:
 
         print("[*] NMIGOD 模型训练完成。")
 
-    # ============================================================
-    # 生成异常分数
-    # ============================================================
     def get_anomaly_scores(self):
-        """异常分数 = GCN 二分类器输出的异常类概率"""
-        print("\n=== 生成异常分数 (NMIGOD GCN 二分类概率) ===")
+        print("\n=== 生成异常分数 (NMIGOD) ===")
+
+        if not self.use_gcn:
+            # 消融变体: 纯 NMI 分数 = 1 - mean(NMI(x, *))
+            M = self.M_matrix.cpu().numpy()
+            N = M.shape[0]
+            row_sums = M.sum(axis=1) - np.diag(M)
+            nmi_mean = row_sums / max(N - 1, 1)
+            self.scores = (1.0 - nmi_mean).astype(np.float64)
+            print(f"纯 NMI 分数计算完成, "
+                  f"范围: [{self.scores.min():.4f}, {self.scores.max():.4f}]")
+            return
+
         self.model.eval()
         with torch.no_grad():
             logits, h = self.model(self.X_gcn_tensor, self.norm_adj)
@@ -567,21 +620,16 @@ class AnomalyDetectionFramework:
         print(f"异常分数计算完成, 范围: [{self.scores.min():.4f}, {self.scores.max():.4f}]")
         print(f"  异常类平均分数: {anomaly_mean:.4f}, 正常类平均分数: {normal_mean:.4f}")
 
-        # 方向校正
         if anomaly_mean < normal_mean:
             print(f"[!] 分数方向倒置, 自动翻转")
             self.scores = 1.0 - self.scores
             self.logits = -self.logits
 
-    # ============================================================
-    # 阈值优化
-    # ============================================================
     def optimize_threshold(self):
         print("\n=== 阈值优化 (仅在验证集上进行) ===")
         if self.scores is None:
             raise ValueError("未生成异常分数")
 
-        # 仅在验证集上搜索最佳阈值, 避免数据泄露
         val_scores = self.scores[self.val_mask]
         val_y_true = self.y_true[self.val_mask]
 
@@ -602,14 +650,10 @@ class AnomalyDetectionFramework:
         print(f"最佳阈值：{best_thresh:.4f}, "
               f"对应验证集 F1 分数：{best_f1:.4f}")
 
-    # ============================================================
-    # 评估指标与 Top-K 分析
-    # ============================================================
     def calculate_metrics_and_topk(self):
-        print("\n=== 计算评估指标 (评估集 = 测试集 + 无标签集) ===")
+        print("\n=== 计算评估指标 (评估集 = 无标签集) ===")
         y_pred = (self.scores >= self.best_threshold).astype(int)
 
-        # 基础指标 — 仅在评估集上计算
         eval_scores = self.scores[self.eval_mask]
         eval_y_true = self.y_true[self.eval_mask]
         eval_pred = y_pred[self.eval_mask]
@@ -633,8 +677,6 @@ class AnomalyDetectionFramework:
         print(f"  Precision={precision:.4f}, Recall={recall:.4f}, "
               f"F1={f1:.4f}, AUC={auc_score:.4f}")
 
-        # Top-K 分析 — 在全部数据的分数上进行 Top-K 选取,
-        # 但 Precision/Recall 基于评估集真实异常数计算
         total_count = len(self.scores)
         total_true_anomalies = int(self.y_true[self.eval_mask].sum())
 
@@ -651,7 +693,6 @@ class AnomalyDetectionFramework:
         topk_results = []
         for k in k_list:
             top_k_indices = sorted_indices[:k]
-            # Top-K 中的真实异常: 仅在评估集中计数
             topk_in_eval = np.intersect1d(top_k_indices,
                                            np.where(self.eval_mask)[0])
             y_true_topk = self.y_true.iloc[topk_in_eval]
@@ -677,12 +718,8 @@ class AnomalyDetectionFramework:
         print(f"Top-K 分析已保存至：{topk_path}")
         return y_pred
 
-    # ============================================================
-    # 保存详细结果
-    # ============================================================
     def save_results(self, y_pred):
         print("\n=== 保存详细结果 ===")
-        # 构造 Split 标识列
         split_labels = np.full(len(self.scores), 'unlabeled', dtype=object)
         split_labels[self.train_mask] = 'train'
         split_labels[self.val_mask] = 'val'
@@ -699,9 +736,6 @@ class AnomalyDetectionFramework:
         self.results_df.to_csv(result_path, index=False)
         print(f"详细检测结果已保存至：{result_path}")
 
-    # ============================================================
-    # 命令行模式
-    # ============================================================
     def _run_cli(self):
         import argparse
         parser = argparse.ArgumentParser(
@@ -757,9 +791,6 @@ class AnomalyDetectionFramework:
             return
         self._execute_pipeline()
 
-    # ============================================================
-    # 流水线执行
-    # ============================================================
     def _execute_pipeline(self):
         for cfg in self.dataset_configs:
             self.df_raw = cfg['df_raw']

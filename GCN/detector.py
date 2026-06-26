@@ -313,24 +313,29 @@ class AnomalyDetectionFramework:
               f"平均度: {adj.sum()/N:.1f}")
 
     # ============================================================
-    # 半监督数据划分
-    # 20% 有标签 (7:2:1 = 训练:验证:测试), 80% 无标签
+    # 半监督数据划分 ()
+    # 20% 有标签 → train/val (75:25), 80% 无标签 → 全部作为 eval
+    # 相比原版 GCN, 去掉了多余的 2% test 子集
     # 分层抽样确保正常/异常样本比例一致
     # ============================================================
     def _split_data(self):
         """
-        半监督数据划分策略:
+        半监督数据划分策略 ():
           1. 分层抽样 20% 作为有标签数据
-          2. 有标签数据按 7:2:1 划分为训练/验证/测试
-          3. 其余 80% 作为无标签数据
-          4. 评估集 = 测试集 + 无标签集
+          2. 有标签数据按 75:25 划分为训练/验证 (无独立 test)
+          3. 其余 80% 作为无标签数据, 直接作为评估集
+          4. 评估集 = 无标签集 (80%)
+
+        改进理由:
+          原版 7:2:1 中的 test (全体 2%) 样本量过小, 统计意义不足.
+          直接以 80% 无标签数据作为评估集, 样本量更大, 方差更小.
         """
         from sklearn.model_selection import train_test_split
 
         N = len(self.y_true)
         y = self.y_true.values
 
-        print(f"\n[*] 半监督数据划分 (labeled_ratio={self.labeled_ratio}, "
+        print(f"\n[*] 半监督数据划分- (labeled_ratio={self.labeled_ratio}, "
               f"random_state={self.random_state})")
 
         # Step 1: 分层抽样 — 20% 有标签, 80% 无标签 (失败时回退到非分层)
@@ -346,66 +351,45 @@ class AnomalyDetectionFramework:
                 random_state=self.random_state
             )
 
-        # Step 2: 有标签数据按 7:2:1 划分为训练/验证/测试
+        # Step 2: 有标签数据按 75:25 划分为训练/验证 (无独立测试集)
         n_labeled = len(labeled_idx)
-        n_val = int(n_labeled * 0.2)   # 验证集: 20% of labeled
-        n_test = int(n_labeled * 0.1)  # 测试集: 10% of labeled
-        # 训练集: 剩余 ~70% of labeled
-        n_train_expected = n_labeled - n_val - n_test
+        n_val = int(n_labeled * 0.25)   # 验证集: 25% of labeled (全体 ~5%)
 
         y_labeled = y[labeled_idx]
 
-        # 先分出训练集 (分层抽样, 失败时回退到非分层)
         try:
-            train_idx_rel, temp_idx_rel = train_test_split(
-                np.arange(n_labeled), test_size=n_val + n_test,
+            train_idx_rel, val_idx_rel = train_test_split(
+                np.arange(n_labeled), test_size=n_val,
                 random_state=self.random_state, stratify=y_labeled
             )
         except ValueError:
-            train_idx_rel, temp_idx_rel = train_test_split(
-                np.arange(n_labeled), test_size=n_val + n_test,
-                random_state=self.random_state
-            )
-
-        # 从剩余中分出验证集和测试集 (分层抽样, 失败时回退到非分层)
-        y_temp = y_labeled[temp_idx_rel]
-        try:
-            val_idx_rel, test_idx_rel = train_test_split(
-                np.arange(len(temp_idx_rel)), test_size=n_test,
-                random_state=self.random_state, stratify=y_temp
-            )
-        except ValueError:
-            val_idx_rel, test_idx_rel = train_test_split(
-                np.arange(len(temp_idx_rel)), test_size=n_test,
+            train_idx_rel, val_idx_rel = train_test_split(
+                np.arange(n_labeled), test_size=n_val,
                 random_state=self.random_state
             )
 
         train_idx = labeled_idx[train_idx_rel]
-        val_idx = labeled_idx[temp_idx_rel[val_idx_rel]]
-        test_idx = labeled_idx[temp_idx_rel[test_idx_rel]]
+        val_idx = labeled_idx[val_idx_rel]
 
         # Step 3: 构建布尔掩码
         self.train_mask = np.zeros(N, dtype=bool)
         self.val_mask = np.zeros(N, dtype=bool)
-        self.test_mask = np.zeros(N, dtype=bool)
+        self.test_mask = np.zeros(N, dtype=bool)       # 无独立 test — 全 False
         self.unlabeled_mask = np.zeros(N, dtype=bool)
 
         self.train_mask[train_idx] = True
         self.val_mask[val_idx] = True
-        self.test_mask[test_idx] = True
         self.unlabeled_mask[unlabeled_idx] = True
 
-        # 评估集 = 测试 + 无标签 (不包含训练和验证, 避免数据泄露)
-        self.eval_mask = self.test_mask | self.unlabeled_mask
+        # 评估集 = 全部无标签数据 (80%), 样本量充足, 方差小
+        self.eval_mask = self.unlabeled_mask
 
-        print(f"  数据划分完成:")
+        print(f"  数据划分完成 (: train/val 二分割, 无独立 test):")
         print(f"    训练集: {train_idx.size} ({train_idx.size/N*100:.1f}%), "
               f"异常比例={y[train_idx].mean():.4f}")
         print(f"    验证集: {val_idx.size} ({val_idx.size/N*100:.1f}%), "
               f"异常比例={y[val_idx].mean():.4f}")
-        print(f"    测试集: {test_idx.size} ({test_idx.size/N*100:.1f}%), "
-              f"异常比例={y[test_idx].mean():.4f}")
-        print(f"    无标签: {unlabeled_idx.size} ({unlabeled_idx.size/N*100:.1f}%), "
+        print(f"    无标签(→评估): {unlabeled_idx.size} ({unlabeled_idx.size/N*100:.1f}%), "
               f"异常比例={y[unlabeled_idx].mean():.4f}")
         print(f"    评估集: {self.eval_mask.sum()} ({self.eval_mask.sum()/N*100:.1f}%)")
 
@@ -422,6 +406,11 @@ class AnomalyDetectionFramework:
         - 异常分数 = P(异常 | 结点) 的输出概率
         """
         print("\n=== 模型训练 (GCN 半监督结点二分类) ===")
+
+        # 固定随机种子, 确保训练可复现
+        torch.manual_seed(self.random_state)
+        np.random.seed(self.random_state)
+
         N = self.X_features.shape[0]
         in_features = self.X_features.shape[1]
 
@@ -455,7 +444,7 @@ class AnomalyDetectionFramework:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr,
                                       weight_decay=5e-4)
 
-        print(f"[*] 模型结构: GCN 二分类器 (半监督)")
+        print(f"[*] 模型结构: GCN 二分类器 ")
         print(f"    输入维度={in_features}, 隐藏层1={self.hidden1}, "
               f"隐藏层2={self.hidden2}, 输出=1 (logit)")
         print(f"[*] 开始训练 (epochs={self.epochs}, device={self.device})...")

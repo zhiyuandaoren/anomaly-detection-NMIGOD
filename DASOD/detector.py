@@ -9,7 +9,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class AnomalyDetectionFramework:
-    def __init__(self):
+    def __init__(self, K=5, lambda_ratio=0.05):
         self.df_raw = None
         self.df_processed = None
         self.feature_columns = []
@@ -20,6 +20,8 @@ class AnomalyDetectionFramework:
         self.scores = None
         self.results_df = None
         self.best_threshold = None
+        self.K = K
+        self.lambda_ratio = lambda_ratio
         self.output_folder = "./output"
 
         # DASOD 特有参数
@@ -190,7 +192,9 @@ class AnomalyDetectionFramework:
         valid_rows = ~((row_sum == 0) | (row_sum == self.formal_context.shape[1]))
         if not np.all(valid_rows):
             self.formal_context = self.formal_context[valid_rows, :]
-            self.y_true = self.y_true[valid_rows]    # 同步标签
+            self.y_true = self.y_true[valid_rows].reset_index(drop=True)
+            self.df_raw = self.df_raw[valid_rows].reset_index(drop=True)
+            self.df_processed = self.df_processed[valid_rows].reset_index(drop=True)
             print(f"移除了 {np.sum(~valid_rows)} 个全0或全1的对象，剩余对象数: {self.formal_context.shape[0]}")
 
         n_objects, n_attrs = self.formal_context.shape
@@ -525,7 +529,7 @@ class AnomalyDetectionFramework:
     def save_results(self, y_pred):
         print("\n=== 保存详细结果 ===")
         self.results_df = pd.DataFrame({
-            'Original_Index': self.df_raw.index[:len(self.scores)],
+            'Original_Index': self.df_raw.index,
             'Anomaly_Score': self.scores,
             'Detection_Result': y_pred,
             'True_Label': self.y_true.values

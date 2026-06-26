@@ -17,7 +17,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # 算法目录名列表（按字母排序，保证列的顺序稳定）
-ALGORITHMS = ["ADFNR", "DASOD", "GCN", "GCN-LOF", "GCOD", "IE", "KNN", "NIEOD", "NMIGOD"]
+ALGORITHMS = ["ADFNR", "DASOD", "GCN", "GCN-LOF", "NIEOD", "NMIGOD"]
 
 
 def find_all_datasets(base_dir: Path, algorithms: list[str]) -> list[str]:

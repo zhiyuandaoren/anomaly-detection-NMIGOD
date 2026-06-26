@@ -1,5 +1,5 @@
 Metric,Value
-Precision,1.0
-Recall,0.0488
-F1-Score,0.093
-AUC,0.9857
+Precision,0.9286
+Recall,0.325
+F1-Score,0.4815
+AUC,0.9889

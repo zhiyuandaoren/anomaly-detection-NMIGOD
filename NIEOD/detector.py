@@ -23,7 +23,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 
 class AnomalyDetectionFramework:
-    def __init__(self):
+    def __init__(self, lambda_param=1.0):
         self.df_raw = None
         self.df_processed = None
         self.feature_columns = []
@@ -34,6 +34,7 @@ class AnomalyDetectionFramework:
         self.scores = None
         self.results_df = None
         self.best_threshold = None
+        self.lambda_param = lambda_param
         self.output_folder = "./output"
         self.lambda_param = 1.0
 
