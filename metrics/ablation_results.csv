@@ -1,0 +1,9 @@
+dataset,variant,F1,AUC
+iris,full,0.9333,1.0
+iris,noAda,0.9677,1.0
+wine,full,0.5882,1.0
+wine,noAda,0.6667,1.0
+glass,full,0.5581,0.8838
+glass,noAda,0.486,0.8515
+diabetes,full,0.7692,0.9794
+diabetes,noAda,0.7692,0.9789

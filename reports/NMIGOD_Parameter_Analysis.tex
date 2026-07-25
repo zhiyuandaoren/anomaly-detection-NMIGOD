@@ -1,0 +1,471 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage{geometry}\geometry{margin=2.2cm}
+\usepackage{booktabs,multirow,graphicx,amsmath,amssymb}
+\usepackage[svgnames,table]{xcolor}
+\usepackage{caption,float,enumitem,longtable}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,fit,backgrounds}
+
+% hyperref 在 ctex 之后加载
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small NMIGOD 参数配置深度解析}
+\fancyhead[R]{\small \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\definecolor{nmired}{HTML}{E31818}
+\definecolor{tblblue}{HTML}{4472C4}
+\definecolor{codebg}{HTML}{F5F5F5}
+\definecolor{paramorange}{HTML}{E67E22}
+\definecolor{structblue}{HTML}{2980B9}
+
+\title{\textbf{NMIGOD 参数配置深度解析}\\[6pt]
+{\Large 邻域互信息图卷积异常检测算法}}
+\author{}
+\date{2026-07-23}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{算法概述}
+% ============================================================
+NMIGOD (Neighborhood Mutual Information and Graph Convolutional Network based Outlier Detection) 是一种面向混合属性数据的半监督异常检测算法。其核心创新在于：
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{自适应邻域半径}：基于连通分量信息熵动态计算每个数值属性的邻域半径 $\varepsilon_a = \sigma_a / (1 + \rho_a)$
+    \item \textbf{邻域互信息图}：用邻域互信息 (NMI) 度量对象间的结构相似性，构建稀疏化的信息图
+    \item \textbf{GCN 半监督分类}：在图结构上进行两层图卷积网络的二分类，以异常概率作为异常分数
+\end{enumerate}
+
+% ============================================================
+\section{参数体系总览}
+% ============================================================
+NMIGOD 的参数体系分为四个层次：
+
+\begin{table}[H]\centering
+\caption{NMIGOD 参数体系四层架构}\label{tab:overview}\small
+\begin{tabular}{lll}
+\toprule
+层次 & 参数类别 & 参数数量 \\
+\midrule
+第一层 & 暴露给用户的超参数 (CLI/构造函数) & 7 个 \\
+第二层 & 固定配置参数 (代码内硬编码) & 4 个 \\
+第三层 & 算法内部计算参数 (数据驱动) & 5 个 \\
+第四层 & 消融实验控制开关 & 2 个 \\
+\bottomrule
+\end{tabular}\end{table}
+
+% ============================================================
+\section{第一层：用户可配置超参数 (7个)}
+% ============================================================
+
+\subsection{lambda\_param ($\lambda$)：邻域半径系数}
+
+\begin{table}[H]\centering\caption{lambda\_param 参数详情}\small
+\begin{tabular}{lp{10cm}}
+\toprule
+属性 & 说明 \\
+\midrule
+CLI 参数 & \texttt{-{}-lambda-param} \\
+默认值 & \texttt{1.0} \\
+推荐值 & \texttt{0.5} (经网格搜索验证) \\
+类型 & \texttt{float} \\
+\midrule
+\textbf{作用机制} & 控制邻域半径的缩放系数。$\lambda$ 影响参考半径 $\sigma_a$ 的构建，进而间接影响自适应半径 $\varepsilon_a = \sigma_a / (1 + \rho_a)$。 \\
+\textbf{调参建议} & $\lambda \in [0.5, 1.5]$。较小的 $\lambda$ 产生更小、更具判别力的邻域；较大的 $\lambda$ 使邻域更宽松，可能引入噪声连接。\\
+\textbf{影响范围} & 直接影响邻域图中的边数，间接影响 NMI 矩阵的稀疏性和 GCN 的消息传递范围 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{mi\_threshold ($\tau$)：互信息稀疏化阈值}
+
+\begin{table}[H]\centering\caption{mi\_threshold 参数详情}\small
+\begin{tabular}{lp{10cm}}
+\toprule
+属性 & 说明 \\
+\midrule
+CLI 参数 & \texttt{-{}-mi-threshold} \\
+默认值 & \texttt{0.05} \\
+推荐值 & \texttt{0.03} (经网格搜索验证) \\
+类型 & \texttt{float} \\
+\midrule
+\textbf{作用机制} & 对归一化后的 NMI 矩阵 $M$ 进行硬阈值过滤：$M_{ij} = 0$ 若 $M_{ij} < \tau$。\\
+\textbf{调参建议} & $\tau \in [0.01, 0.1]$。较低的 $\tau$ 保留更多的结构连接；较高的 $\tau$ 使图更稀疏，降低计算开销但可能丢失有用信息。\\
+\textbf{影响范围} & 决定 GCN 输入图的稀疏度和拓扑结构。过于稀疏的图会导致 GCN 欠拟合；过于稠密的图会引入噪声。\\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{hidden1, hidden2：GCN 隐藏层维度}
+
+\begin{table}[H]\centering\caption{GCN 架构参数详情}\small
+\begin{tabular}{lp{10cm}}
+\toprule
+属性 & 说明 \\
+\midrule
+CLI 参数 & \texttt{-{}-hidden1} / \texttt{-{}-hidden2} \\
+默认值 & \texttt{hidden1=128}, \texttt{hidden2=64} \\
+类型 & \texttt{int} \\
+\midrule
+\textbf{作用机制} & GCN 采用两层结构：第一层 $X \to h_{128}$ (ReLU + Dropout)，第二层 $h_{128} \to h_{64}$ (ReLU)，最终线性层 $h_{64} \to 1$ (logits)。\\
+\textbf{调参建议} & 根据输入特征维度调整。特征维度高时可适当增大；小数据集建议减小以避免过拟合。\\
+\textbf{模型结构} &
+$\underbrace{X}_{d_{in}} \xrightarrow{\text{GC}_1} \underbrace{h_1}_{128} \xrightarrow[\text{Dropout}]{\text{ReLU}} \underbrace{h_1}_{128} \xrightarrow{\text{GC}_2} \underbrace{h_2}_{64} \xrightarrow{\text{ReLU}} \underbrace{h_2}_{64} \xrightarrow{\text{Linear}} \underbrace{\hat{y}}_{1}$ \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{epochs, lr：训练超参数}
+
+\begin{table}[H]\centering\caption{训练超参数详情}\small
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+属性 & epochs & lr \\
+\midrule
+CLI 参数 & \texttt{-{}-epochs} & \texttt{-{}-lr} \\
+默认值 & 200 & 0.01 \\
+类型 & int & float \\
+\midrule
+\textbf{作用} & GCN 训练迭代轮数 & Adam 优化器学习率 \\
+\textbf{推荐范围} & [100, 500] & [0.001, 0.01] \\
+\textbf{说明} & 配合早停策略使用更佳 & 综合报告中使用 0.001 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{labeled\_ratio：标注比例}
+
+\begin{table}[H]\centering\caption{labeled\_ratio 参数详情}\small
+\begin{tabular}{lp{10cm}}
+\toprule
+属性 & 说明 \\
+\midrule
+构造函数参数 & \texttt{labeled\_ratio} \\
+默认值 & \texttt{0.2} (20\%) \\
+类型 & \texttt{float} \\
+CLI 暴露 & 否 (仅 Python API) \\
+\midrule
+\textbf{作用} & 半监督学习中标注样本的比例。标注集中 75\% 用于训练，25\% 用于验证。\\
+\textbf{划分方式} & 全量数据的 20\% 作为标注集(其中 75\% 训练, 25\% 验证), 80\% 作为无标签评估集。\\
+\textbf{说明} & 使用分层采样 (stratify) 保持训练/验证/评估集中的异常比例一致。\\
+\bottomrule
+\end{tabular}\end{table}
+
+% ============================================================
+\section{第二层：固定配置参数 (4个)}
+% ============================================================
+
+\begin{table}[H]\centering\caption{代码内硬编码的固定参数}\small
+\begin{tabular}{lllp{6cm}}
+\toprule
+参数 & 值 & 位置 & 说明 \\
+\midrule
+\texttt{dropout} & 0.5 & GCNClassifier.\_\_init\_\_ & GCN 层间 Dropout 率，防止过拟合 \\
+\texttt{weight\_decay} & $5\times 10^{-4}$ & train\_model & Adam 优化器 L2 正则化系数 \\
+\texttt{random\_state} & 42 & 构造函数 & 全局随机种子，保证可复现性 \\
+\texttt{pos\_weight\_cap} & 100.0 & train\_model & BCE 损失中正类权重的上界 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{pos\_weight 动态计算机制}
+BCEWithLogitsLoss 的 \texttt{pos\_weight} 根据训练集正负样本比自动计算：
+\[
+\text{pos\_weight} = \min\left(\frac{N_{neg}^{train}}{N_{pos}^{train}},\; 100.0\right)
+\]
+这确保模型在面对极度不平衡的异常检测数据时能够有效学习正类（异常）样本。
+
+% ============================================================
+\section{第三层：算法内部计算参数 (5个)}
+% ============================================================
+
+\subsection{参考半径 $\sigma_a$}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{定义}：$\sigma_a = \text{std}(X_a^{norm})$，即数值属性 $a$ 在 $[0,1]$ 归一化后的标准差
+    \item \textbf{意义}：反映属性 $a$ 的离散程度，作为邻域半径的基准尺度
+    \item \textbf{边界处理}：若 $\sigma_a = 0$，则设为 $10^{-6}$ 避免除零
+\end{itemize}
+
+\subsection{划分信息熵 $NE_a$ (公式 10)}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{定义}：$NE_a = -\sum_{i} \frac{|C_i|}{|U|} \log_2 \frac{|C_i|}{|U|}$
+    \item \textbf{计算方法}：对属性 $a$ 的值排序后，以 $\sigma_a$ 为间隔阈值切分连通分量 $\{C_i\}$
+    \item \textbf{连通分量判定}：排序序列中相邻值之差 $> \sigma_a$ 即为断点
+    \item \textbf{意义}：度量属性 $a$ 上数据分布的聚集程度。$NE_a$ 越高说明对象分布越均匀（密度越低），$NE_a$ 越低说明存在明显的聚集结构（密度越高）
+\end{itemize}
+
+\subsection{全局密度 $\rho_a$}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{定义}：$\rho_a = 1 - \dfrac{NE_a}{\log_2|U|}$
+    \item \textbf{值域}：经裁剪后 $\rho_a \in [0, 1]$
+    \item \textbf{解释}：
+    \begin{itemize}
+        \item $\rho_a \to 1$：属性 $a$ 上数据高度聚集（连通分量少，信息熵低）
+        \item $\rho_a \to 0$：属性 $a$ 上数据均匀分布（连通分量多，信息熵高）
+    \end{itemize}
+    \item \textbf{作用}：作为自适应半径的分母调节因子
+\end{itemize}
+
+\subsection{自适应半径 $\varepsilon_a$ (公式 12)}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{定义}：$\varepsilon_a = \dfrac{\sigma_a}{1 + \rho_a}$
+    \item \textbf{核心直觉}：
+    \begin{itemize}
+        \item 密集属性的 $\rho_a$ 大，$\varepsilon_a$ 缩小 $\to$ 在密集区域需要更精细的分辨
+        \item 稀疏属性的 $\rho_a$ 小，$\varepsilon_a$ 接近 $\sigma_a \to$ 在稀疏区域放宽邻域范围
+    \end{itemize}
+    \item \textbf{值域}：$\varepsilon_a \in [\sigma_a/2,\; \sigma_a]$
+    \item \textbf{双向规则}：最终邻域判定使用 $|x_i^a - x_j^a| \leq \min(\varepsilon_a(x_i), \varepsilon_a(x_j))$
+\end{itemize}
+
+\subsection{邻域互信息矩阵 $M$}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{构建流程}：
+    \begin{enumerate}
+        \item 逐属性构建邻域掩码 $N_{mask}$：数值属性用 $\varepsilon$ 阈值，类别属性用相等判断
+        \item 计算邻域交集：$intersection_{ij} = |N(i) \cap N(j)|$
+        \item 计算 NMI：$I_{ij} = \frac{|N(i) \cap N(j)|}{N} \cdot \log_2\left(\frac{N \cdot |N(i) \cap N(j)|}{|N(i)| \cdot |N(j)|}\right)$
+        \item 归一化：$M = I / \max(I_{off\text{-}diag})$
+        \item 稀疏化：$M_{ij} = 0 \text{ if } M_{ij} < \tau$
+        \item 对称归一化：$\hat{M} = D^{-1/2} M D^{-1/2}$
+    \end{enumerate}
+    \item \textbf{物理意义}：$M_{ij}$ 度量对象 $x_i$ 和 $x_j$ 在整个属性空间中的邻域结构相似性
+\end{itemize}
+
+% ============================================================
+\section{第四层：消融实验控制开关 (2个)}
+% ============================================================
+
+\begin{table}[H]\centering\caption{消融实验控制参数}\small
+\begin{tabular}{lllp{7cm}}
+\toprule
+参数 & 默认值 & 关闭效果 & 实验目的 \\
+\midrule
+\texttt{use\_adaptive\_radius} & True & $\varepsilon_a = \sigma_a$ (无自适应) & 验证自适应半径对性能的贡献 \\
+\texttt{use\_gcn} & True & 跳过 GCN, 使用纯 NMI 分数 & 验证 GCN 图学习对性能的贡献 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{纯 NMI 模式 (use\_gcn=False)}
+
+当关闭 GCN 时，异常分数直接从 NMI 矩阵导出：
+\[
+score(x_i) = 1 - \frac{1}{|U|-1} \sum_{j \neq i} M_{ij}
+\]
+即对象 $x_i$ 与所有其他对象的平均 NMI 越低，越可能是异常。
+
+% ============================================================
+\section{参数敏感性分析与推荐配置}
+% ============================================================
+
+\subsection{网格搜索结果}
+综合报告中对 $(\lambda, \tau)$ 进行了 9 组网格搜索 ($\lambda \in \{0.5, 1.0, 1.5\}$, $\tau \in \{0.03, 0.05, 0.1\}$)，验证数据集为 iris, wine, glass, diabetes。
+
+\begin{table}[H]\centering\caption{推荐配置 vs 默认配置}\small
+\begin{tabular}{lccc}
+\toprule
+参数 & 默认值 & 推荐值 & 调整理由 \\
+\midrule
+\texttt{lambda\_param} ($\lambda$) & 1.0 & 0.5 & 更小邻域提高判别力 \\
+\texttt{mi\_threshold} ($\tau$) & 0.05 & 0.03 & 保留更多结构连接 \\
+\texttt{hidden1} & 128 & 128 & 保持不变 \\
+\texttt{hidden2} & 64 & 64 & 保持不变 \\
+\texttt{epochs} & 200 & 200 & 保持不变 \\
+\texttt{lr} & 0.01 & 0.001 & 综合报告中使用的学习率 \\
+\texttt{labeled\_ratio} & 0.2 & 0.2 & 20\% 标注为常规半监督设置 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{参数影响链路图}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}[
+    node distance=1.6cm,
+    param/.style={rectangle, draw=paramorange, fill=paramorange!10, rounded corners, minimum width=2.8cm, minimum height=0.8cm, align=center, font=\small},
+    internal/.style={rectangle, draw=structblue, fill=structblue!10, rounded corners, minimum width=2.8cm, minimum height=0.8cm, align=center, font=\small},
+    output/.style={rectangle, draw=nmired, fill=nmired!10, rounded corners, minimum width=2.8cm, minimum height=0.8cm, align=center, font=\small},
+    arrow/.style={->, >=stealth, thick}
+]
+    % 用户参数
+    \node[param] (lambda) {$\lambda$ (lambda\_param)};
+    \node[param, right=of lambda, xshift=1.2cm] (tau) {$\tau$ (mi\_threshold)};
+    \node[param, right=of tau, xshift=1.2cm] (lrn) {lr / epochs};
+
+    % 内部计算
+    \node[internal, below=of lambda] (sigma) {$\sigma_a$ (参考半径)};
+    \node[internal, below=of sigma] (ne) {$NE_a$ (划分信息熵)};
+    \node[internal, below=of ne] (rho) {$\rho_a$ (全局密度)};
+    \node[internal, below=of rho] (eps) {$\varepsilon_a$ (自适应半径)};
+    \node[internal, below=of eps] (nmi) {NMI 矩阵 $M$};
+    \node[internal, below=of tau] (sparse) {稀疏化 $M_{ij} \geq \tau$};
+
+    % 输出
+    \node[output, below=of sparse, yshift=-0.6cm] (gcn) {GCN 训练};
+    \node[output, left=of gcn, xshift=-1.2cm] (graph) {归一化图 $\hat{M}$};
+    \node[output, right=of gcn, xshift=1.2cm] (score) {异常分数};
+
+    % 箭头
+    \draw[arrow] (lambda) -- (sigma);
+    \draw[arrow] (sigma) -- (ne);
+    \draw[arrow] (ne) -- (rho);
+    \draw[arrow] (rho) -- (eps);
+    \draw[arrow] (eps) -- (nmi);
+    \draw[arrow] (nmi) -- (sparse);
+    \draw[arrow] (tau) -- (sparse);
+    \draw[arrow] (sparse) -- (graph);
+    \draw[arrow] (graph) -- (gcn);
+    \draw[arrow] (lrn) -- (gcn);
+    \draw[arrow] (gcn) -- (score);
+
+    % 自适应开关
+    \node[param, left=of eps, xshift=-2cm, fill=red!10, draw=red, minimum width=2.2cm] (abla) {use\_adaptive\_radius};
+    \draw[arrow, red, dashed] (abla) -- (eps);
+
+\end{tikzpicture}
+\caption{NMIGOD 参数影响链路：从用户超参数到最终异常分数}
+\end{figure}
+
+% ============================================================
+\section{完整命令行使用示例}
+% ============================================================
+
+\subsection{默认参数运行}
+\begin{verbatim}
+python detector.py --datasets data.csv --target label --anomaly anomaly
+\end{verbatim}
+
+\subsection{使用推荐配置}
+\begin{verbatim}
+python detector.py \
+    --datasets data.csv \
+    --target label \
+    --anomaly anomaly \
+    --lambda-param 0.5 \
+    --mi-threshold 0.03 \
+    --lr 0.001 \
+    --epochs 200
+\end{verbatim}
+
+\subsection{多数据集批量运行}
+\begin{verbatim}
+python detector.py \
+    --datasets data1.csv,data2.csv,data3.csv \
+    --target label \
+    --anomaly anomaly \
+    --lambda-param 0.5 \
+    --mi-threshold 0.03 \
+    --lr 0.001 \
+    --output ./results
+\end{verbatim}
+
+\subsection{Python API 调用 (含消融实验)}
+\begin{verbatim}
+from detector import AnomalyDetectionFramework
+
+# 完整 NMIGOD (推荐配置)
+detector = AnomalyDetectionFramework(
+    lambda_param=0.5,
+    mi_threshold=0.03,
+    hidden1=128, hidden2=64,
+    epochs=200, lr=0.001,
+    labeled_ratio=0.2,
+    use_adaptive_radius=True,  # 自适应半径开启
+    use_gcn=True               # GCN 分类器开启
+)
+
+# 消融实验 1: 固定半径 (关闭自适应)
+detector_no_ada = AnomalyDetectionFramework(
+    lambda_param=0.5,
+    mi_threshold=0.03,
+    use_adaptive_radius=False,  # epsilon_a = sigma_a
+    use_gcn=True
+)
+
+# 消融实验 2: 纯 NMI (关闭 GCN)
+detector_nmi_only = AnomalyDetectionFramework(
+    lambda_param=0.5,
+    mi_threshold=0.03,
+    use_adaptive_radius=True,
+    use_gcn=False  # score = 1 - mean(NMI)
+)
+\end{verbatim}
+
+% ============================================================
+\section{参数调优实战指南}
+% ============================================================
+
+\subsection{调参优先级}
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{第一优先级：$\lambda$ 和 $\tau$} —— 直接影响图结构质量，对性能影响最大。建议在验证集上网格搜索 $\lambda \in \{0.3, 0.5, 0.8, 1.0, 1.5\}$ 和 $\tau \in \{0.01, 0.03, 0.05, 0.08, 0.1\}$。
+    \item \textbf{第二优先级：lr} —— GCN 训练收敛的关键。若训练损失震荡或不收敛，尝试降低 lr 至 0.001 或 0.0005。
+    \item \textbf{第三优先级：hidden1, hidden2} —— 根据输入特征维度调整。特征数 $< 50$ 时可尝试 (64, 32)；特征数 $> 200$ 时可尝试 (256, 128)。
+    \item \textbf{第四优先级：epochs} —— 观察损失曲线，一般在 200 轮左右收敛。可配合早停策略。
+\end{enumerate}
+
+\subsection{不同数据类型的调参建议}
+
+\begin{table}[H]\centering\caption{按数据类型推荐配置}\small
+\begin{tabular}{lccc}
+\toprule
+数据类型 & $\lambda$ & $\tau$ & 说明 \\
+\midrule
+纯数值型 & 0.3--0.5 & 0.02--0.03 & 数值属性的 $\sigma_a$ 更可靠，可用更小的 $\lambda$ \\
+混合型 & 0.5--0.8 & 0.03--0.05 & 类别属性稀释了距离度量，需适中的半径 \\
+纯类别型 & 0.8--1.5 & 0.03--0.05 & 类别属性无距离概念，$\lambda$ 影响较小 \\
+高维数据 & 0.5--1.0 & 0.05--0.10 & 维数灾难下需要更稀疏的图结构 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\subsection{诊断输出解读}
+
+训练过程中的关键诊断信息：
+\begin{verbatim}
+[*] 构建邻域互信息图 (N=452)...
+[*] 互信息图构建完成, 边数(含自环): 15234, 非零边比例: 7.45%
+    平均 NE=2.3456, 平均 rho=0.6187, 平均 eps=0.0432, 平均 sigma=0.0712
+\end{verbatim}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{非零边比例}：建议在 5\%--20\% 之间。太低说明图过于稀疏，GCN 消息传递受限；太高说明引入了过多噪声边。
+    \item \textbf{平均 $\rho$}：接近 1 表示数据高度聚集，接近 0 表示数据均匀分散。中等的 $\rho$ (0.4--0.7) 通常对应合理的邻域划分。
+    \item \textbf{平均 $\varepsilon$ vs $\sigma$}：$\varepsilon < \sigma$ 说明自适应机制正在收紧某些属性的邻域半径。
+\end{itemize}
+
+% ============================================================
+\section{总结}
+% ============================================================
+
+\begin{table}[H]\centering\caption{NMIGOD 参数配置速查表}\small
+\begin{tabular}{lcccp{4cm}}
+\toprule
+参数 & 默认 & 推荐 & 类型 & 调参优先级 \\
+\midrule
+\texttt{lambda\_param} ($\lambda$) & 1.0 & 0.5 & float & ★★★ 最高 \\
+\texttt{mi\_threshold} ($\tau$) & 0.05 & 0.03 & float & ★★★ 最高 \\
+\texttt{lr} & 0.01 & 0.001 & float & ★★☆ 高 \\
+\texttt{epochs} & 200 & 200 & int & ★☆☆ 中 \\
+\texttt{hidden1} & 128 & 128 & int & ★☆☆ 中 \\
+\texttt{hidden2} & 64 & 64 & int & ★☆☆ 中 \\
+\texttt{labeled\_ratio} & 0.2 & 0.2 & float & --- 固定 \\
+\texttt{use\_adaptive\_radius} & True & True & bool & --- 消融用 \\
+\texttt{use\_gcn} & True & True & bool & --- 消融用 \\
+\texttt{dropout} & 0.5 & 0.5 & float & --- 硬编码 \\
+\texttt{weight\_decay} & $5\times 10^{-4}$ & $5\times 10^{-4}$ & float & --- 硬编码 \\
+\bottomrule
+\end{tabular}\end{table}
+
+\vspace{6pt}
+NMIGOD 的参数设计体现了"以数据驱动为主，以人工调参为辅"的理念。其核心创新——基于连通分量信息熵的自适应半径 $\varepsilon_a = \sigma_a / (1 + \rho_a)$——使得算法能够自动感知每个属性的数据分布密度并动态调整邻域分辨率，大幅降低了对人工调节 $\lambda$ 的依赖。在实践中，仅需调节 $\lambda$ 和 $\tau$ 两个核心超参数即可覆盖大多数应用场景。
+
+\end{document}

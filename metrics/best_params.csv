@@ -1,0 +1,2 @@
+algorithm,params,avg_f1,avg_auc,per_dataset_f1
+NIEOD,"{""lambda_param"": 0.5}",0.6047,0.8015,"{""iris"": 0.9091, ""wine"": 0.75, ""glass"": 0.3478, ""diabetes"": 0.412}"

@@ -1,0 +1,139 @@
+{
+  "F1": {
+    "GCN": {
+      "nmigod_mean": 0.5092,
+      "opponent_mean": 0.5086,
+      "wins": 15,
+      "losses": 11,
+      "p_value": 0.4545,
+      "n": 29
+    },
+    "GCN-LOF": {
+      "nmigod_mean": 0.5092,
+      "opponent_mean": 0.504,
+      "wins": 13,
+      "losses": 14,
+      "p_value": 0.4904,
+      "n": 29
+    },
+    "NIEOD": {
+      "nmigod_mean": 0.5092,
+      "opponent_mean": 0.4102,
+      "wins": 19,
+      "losses": 10,
+      "p_value": 0.038,
+      "n": 29
+    }
+  },
+  "AUC": {
+    "GCN": {
+      "nmigod_mean": 0.8604,
+      "opponent_mean": 0.85,
+      "wins": 16,
+      "losses": 11,
+      "p_value": 0.0747,
+      "n": 29
+    },
+    "GCN-LOF": {
+      "nmigod_mean": 0.8604,
+      "opponent_mean": 0.8586,
+      "wins": 13,
+      "losses": 14,
+      "p_value": 0.6134,
+      "n": 29
+    },
+    "NIEOD": {
+      "nmigod_mean": 0.8604,
+      "opponent_mean": 0.685,
+      "wins": 26,
+      "losses": 3,
+      "p_value": 0.0,
+      "n": 29
+    }
+  },
+  "F1_filtered": {
+    "GCN": {
+      "nmigod_mean": 0.5616,
+      "opponent_mean": 0.5309,
+      "wins": 15,
+      "losses": 6,
+      "p_value": 0.0367,
+      "n": 24
+    },
+    "GCN-LOF": {
+      "nmigod_mean": 0.5616,
+      "opponent_mean": 0.538,
+      "wins": 13,
+      "losses": 10,
+      "p_value": 0.1007,
+      "n": 24
+    },
+    "NIEOD": {
+      "nmigod_mean": 0.5616,
+      "opponent_mean": 0.3978,
+      "wins": 19,
+      "losses": 5,
+      "p_value": 0.0016,
+      "n": 24
+    }
+  },
+  "subgroup": {
+    "Numerical": {
+      "GCN": 0.5208,
+      "GCN-LOF": 0.5203,
+      "NIEOD": 0.4783,
+      "NMIGOD": 0.5396,
+      "n": 11
+    },
+    "Mixed": {
+      "GCN": 0.428,
+      "GCN-LOF": 0.4186,
+      "NIEOD": 0.3906,
+      "NMIGOD": 0.4202,
+      "n": 14
+    },
+    "Categorical": {
+      "GCN": 0.7577,
+      "GCN-LOF": 0.7581,
+      "NIEOD": 0.2918,
+      "NMIGOD": 0.7376,
+      "n": 4
+    }
+  },
+  "effect_size": {
+    "GCN": {
+      "delta": 0.0143,
+      "magnitude": "negligible"
+    },
+    "GCN-LOF": {
+      "delta": 0.0036,
+      "magnitude": "negligible"
+    },
+    "NIEOD": {
+      "delta": 0.214,
+      "magnitude": "small"
+    }
+  },
+  "main_metrics": {
+    "GCN": {
+      "F1": 0.5086,
+      "AUC": 0.85,
+      "Precision": 0
+    },
+    "GCN-LOF": {
+      "F1": 0.504,
+      "AUC": 0.8586,
+      "Precision": 0
+    },
+    "NIEOD": {
+      "F1": 0.4102,
+      "AUC": 0.685,
+      "Precision": 0
+    },
+    "NMIGOD": {
+      "F1": 0.5092,
+      "AUC": 0.8604,
+      "Precision": 0
+    }
+  }
+}

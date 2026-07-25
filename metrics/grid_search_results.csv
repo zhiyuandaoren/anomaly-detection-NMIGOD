@@ -1,0 +1,5 @@
+algorithm,params,avg_f1,avg_auc,per_dataset_f1
+NIEOD,"{""lambda_param"": 0.5}",0.6047,0.8015,"{""iris"": 0.9091, ""wine"": 0.75, ""glass"": 0.3478, ""diabetes"": 0.412}"
+NIEOD,"{""lambda_param"": 1.0}",0.597,0.7898,"{""iris"": 0.9091, ""wine"": 0.75, ""glass"": 0.3478, ""diabetes"": 0.381}"
+NIEOD,"{""lambda_param"": 1.5}",0.6047,0.8015,"{""iris"": 0.9091, ""wine"": 0.75, ""glass"": 0.3478, ""diabetes"": 0.412}"
+NIEOD,"{""lambda_param"": 2.0}",0.5985,0.7893,"{""iris"": 0.9091, ""wine"": 0.75, ""glass"": 0.3478, ""diabetes"": 0.3871}"

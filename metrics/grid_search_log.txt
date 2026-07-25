@@ -1,0 +1,4 @@
+Grid Search Log — 2026-07-22 16:14:18.931532
+Datasets: ['iris', 'wine', 'glass', 'diabetes']
+
+[NIEOD] best_params={"lambda_param": 0.5} avg_f1=0.6047 time=9s
