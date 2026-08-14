@@ -1,0 +1,35 @@
+{
+  "n_datasets": 24,
+  "n_algorithms": 6,
+  "alpha": 0.05,
+  "F1-Score": {
+    "friedman_stat": 14.145455,
+    "friedman_p": 0.014711,
+    "nemenyi_cd": 1.539176,
+    "q_alpha": 2.85,
+    "avg_ranks": {
+      "ADFNR": 3.875,
+      "DASOD": 3.9583,
+      "GCN": 2.9583,
+      "GCN-LOF": 3.125,
+      "NIEOD": 4.3333,
+      "NMIGOD": 2.75
+    },
+    "significant": true
+  },
+  "AUC": {
+    "friedman_stat": 53.519856,
+    "friedman_p": 0.0,
+    "nemenyi_cd": 1.539176,
+    "q_alpha": 2.85,
+    "avg_ranks": {
+      "ADFNR": 4.4583,
+      "DASOD": 4.7083,
+      "GCN": 2.7083,
+      "GCN-LOF": 2.3333,
+      "NIEOD": 4.6667,
+      "NMIGOD": 2.125
+    },
+    "significant": true
+  }
+}

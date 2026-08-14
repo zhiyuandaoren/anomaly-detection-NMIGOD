@@ -1,0 +1,7 @@
+No.,Dataset,Objects,Attributes,Outliers,OutlierRatio,DataType,OutlierLabel,OutlierValues
+2,dermatology,366,34,72,19.67,Numerical,class,anomaly
+3,hcv_v2,615,13,82,13.33,Mixed,class,anomaly
+4,ilpd,583,10,416,71.36,Mixed,class,anomaly
+5,kr_vs_kp,3196,35,1527,47.78,Categorical,class,anomaly
+6,mammographic_mass,961,5,445,46.31,Numerical,class,anomaly
+7,statlog_australian_v2,690,14,383,55.51,Numerical,class,anomaly

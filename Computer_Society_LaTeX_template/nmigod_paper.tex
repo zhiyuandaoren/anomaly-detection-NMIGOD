@@ -1,0 +1,878 @@
+\documentclass[lettersize,journal]{IEEEtran}
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amssymb}
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+
+\begin{document}
+
+\title{Structure Information Graph Learning with Graph Convolutional Networks\\ for Anomaly Detection in Mixed-Attribute Data}
+
+\author{Ziwei~Cui\textsuperscript{1},~Jiaojiao~Niu\textsuperscript{1*},~
+        Degang~Chen\textsuperscript{2},~and~Jinhai~Li\textsuperscript{3,4}
+\thanks{\textsuperscript{1}School of Computer Science, Yangtze University, Jingzhou, Hubei 434023, China.}
+\thanks{\textsuperscript{2}School of Mathematics and Physics, North China Electric Power University, Beijing 102206, China.}
+\thanks{\textsuperscript{3}Yunnan Key Laboratory of Complex Systems and Brain-Inspired Intelligence,
+        Kunming University of Science and Technology, Kunming 650500, China.}
+\thanks{\textsuperscript{4}Faculty of Science, Kunming University of Science and Technology, Kunming 650500, China.}
+\thanks{*Corresponding author: Jiaojiao Niu.}
+\thanks{Manuscript received xxx; revised xxx.}}
+
+\markboth{IEEE Transactions on Knowledge and Data Engineering,~Vol.~XX, No.~XX,~2026}%
+{Cui \MakeLowercase{\textit{et al.}}: NMIGOD for Anomaly Detection in Mixed-Attribute Data}
+
+\maketitle
+
+\begin{abstract}
+Anomaly detection in mixed-attribute data remains a challenging problem due to heterogeneous feature types
+and the difficulty of modeling structural relationships among samples. Traditional distance-based and
+neighborhood-based methods often fail to capture complex dependencies between samples, leading to
+unsatisfactory detection performance. To address this issue, this paper proposes a structure information
+graph learning framework for anomaly detection in mixed data, termed NMIGOD. Specifically, a Neighborhood
+Mutual Information (NMI)-based measure is introduced to characterize structural dependencies by modeling
+the consistency of local neighborhood structures. Based on this measure, a weighted graph is constructed
+where edge weights encode neighborhood-level structural similarity rather than point-wise distance. A
+threshold-based edge filtering strategy is then applied to remove weak structural dependencies to generate
+a compact structure-preserving graph. On top of the constructed graph, a Graph Convolutional Network is
+employed to propagate structural information and learn discriminative representations for anomaly scoring
+under weakly supervised settings. Extensive experiments on 24 UCI benchmark datasets demonstrate that
+the proposed method consistently outperforms state-of-the-art approaches. The code is available at:
+\url{https://github.com/zhiyuandaoren/anomaly-detection-NMIGOD.git}.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Anomaly detection, neighborhood mutual information, graph structure learning, graph convolutional networks, mixed-attribute data.
+\end{IEEEkeywords}
+
+% ===================================================================
+\section{Introduction}
+% ===================================================================
+\IEEEPARstart{A}{nomaly} detection aims to identify rare patterns or observations that deviate markedly
+from the majority of data \cite{ref1,ref2}. Since anomalies often signal critical events, it has become
+a fundamental task in many high-stakes domains, such as fraud detection and industrial fault diagnosis
+\cite{ref3,ref4}. However, real-world data often exhibit high complexity, particularly in the form of
+mixed-attribute data, making it difficult for traditional distance-based or density-based methods to
+provide a unified similarity measure. As structural information offers a more robust basis for similarity
+assessment by capturing how objects are situated within their local neighborhoods, it is meaningful to
+design anomaly detection methods based on structural similarity rather than conventional feature distances.
+
+Existing anomaly detection methods can be broadly divided into three categories. The first category
+comprises traditional approaches, including statistical models \cite{ref5}, distance-based methods such
+as $k$-nearest neighbors ($k$-NN) \cite{ref6} and local outlier factor (LOF) \cite{ref7}, and
+clustering-based techniques \cite{ref8}. These methods identify anomalies by measuring deviations in the
+original feature space through probabilistic assumptions, geometric distance, or cluster structures.
+Although these methods are simple and interpretable, the effectiveness is often limited in complex
+real-world scenarios, particularly when data exhibits mixed types or high-dimensional structures. The
+second category consists of methods that incorporate other theoretical tools, such as fuzzy sets, rough
+sets \cite{ref11} and formal concept analysis, to better handle data uncertainty and heterogeneity. Among
+these, neighborhood rough sets (NRS) \cite{ref12,ref13} have gained particular attention due to their
+data-driven nature and the ability to handle mixed attributes without requiring prior probability
+distributions. Representative NRS-based works include NIEOD \cite{ref14}, which defines neighborhood
+information entropy and uses its variation for outlier scoring; ADFNR \cite{ref16} introduces fuzzy
+relations into the NRS framework to handle noise and uncertainty; GCOD \cite{ref19} is the first to
+apply formal concept analysis to outlier detection by measuring distances between granular concepts, and
+DASOD \cite{ref20} detects outliers from both object and attribute perspectives within the FCA framework
+and integrates structural deviation with attribute-level rarity. These methods are effective at
+characterizing local uncertainty, but they operate on individual granules and fail to capture global
+topological dependencies among data objects. The third category encompasses deep learning-based methods,
+particularly graph neural networks (GNNs) and graph convolutional networks (GCNs) \cite{ref21}, which
+have been widely adopted for their ability to learn from relational structures. Notable examples include
+LUNAR \cite{ref22}, DOMINANT \cite{ref23}, and ADA-GAD \cite{ref24}. However, these methods typically
+construct graphs using conventional feature-space distance (e.g., Euclidean distance or $k$-NN rules),
+which are unreliable for mixed-attribute data. Moreover, under the multi-layer message passing mechanism
+of GCNs, outliers that are erroneously connected to normal clusters tend to have their anomaly signals
+averaged out by numerous normal neighbors, leading to the well-known over-smoothing problem \cite{ref25}.
+As a result, NRS-based methods capture local structures but lack global context, while GCN-based approaches
+model global dependencies but rely on distance-based graph construction, which may introduce spurious
+connections and dilute anomaly signals in mixed-attribute settings.
+
+As stated above, both NRS-based and GCN-based approaches have complementary strengths and weaknesses,
+making their integration a natural strategy. For achieving this, the key issue is how to construct a graph
+that captures local neighborhood information while supporting global learning. Existing graph construction
+methods can be broadly categorized into heuristic-based and learning-based
+approaches~\cite{Mlyahilu2025}, with the former typically relying on feature-space distances (e.g.,
+Euclidean or $k$-NN) or information-theoretic measures such as transfer
+entropy~\cite{Febrinanto2025}, and the latter learning graph topologies adaptively from
+data~\cite{He2024,Pang2024}. However, these approaches still fundamentally operate in the feature space,
+without explicitly considering structural similarity between local neighborhoods. To address this, this
+paper proposes a structure information graph learning approach that shifts the basis of graph construction
+from feature distance to structural similarity, where two objects are connected if they share similar
+local neighborhood configurations. To quantify such structural similarity, Neighborhood Mutual Information
+(NMI) within the neighborhood rough set framework is introduced. A critical issue in graph learning is
+the determination of neighborhood scales, which significantly affects the quality of the resulting graph.
+In the proposed model, an entropy-based adaptive radius is introduced, eliminating the need for manual
+parameter tuning. The constructed graph is then fed into a GCN for semi-supervised anomaly detection.
+Extensive experiments on 24 UCI benchmark datasets, covering various data types and anomaly ratios, are
+conducted to evaluate the proposed method against several state-of-the-art baselines. The experimental
+results demonstrate that the proposed method consistently achieves superior performance across multiple
+evaluation metrics. The main contributions of this paper are summarized as follows:
+
+\begin{enumerate}
+\item An entropy-based adaptive radius is proposed to determine neighborhood scales without manual tuning;
+\item A structure information graph is constructed using Neighborhood Mutual Information to capture
+      structural similarity;
+\item A novel anomaly detection framework named NMIGOD is proposed by integrating NMI-based graph
+      construction with GCN for semi-supervised learning.
+\end{enumerate}
+
+The remainder of this paper is organized as follows: Section~2 reviews the preliminaries. Section~3
+describes the proposed NMIGOD framework in detail. Section~4 reports the experimental results, and
+Section~5 concludes the paper.
+
+% ===================================================================
+\section{Preliminaries}
+% ===================================================================
+This section reviews two essential preliminaries: neighborhood information systems and graph
+convolutional networks.
+
+\subsection{Neighborhood Information System}
+
+A neighborhood information system is an extension of the classical information system by incorporating
+neighborhood relations. Therefore, the classical information system is first recalled as follows.
+
+An information system is formally defined as a quadruple \(IS = (U, A, V, f)\), where
+\(U = \{x_{1}, x_{2}, \cdots, x_{n}\}\) is a non-empty finite set of objects,
+\(A = \{a_{1}, a_{2}, \cdots, a_{m}\}\) is a non-empty finite set of attributes,
+\(V = \bigcup_{a \in A} V_{a}\) is the union of attribute domains \(V_{a}\), and
+\(f: U \times A \rightarrow V\) denotes an information function such that \(f(x,a) \in V_{a}\) for all
+\(x \in U\) and \(a \in A\).
+
+The construction of neighborhoods often relies on a distance function defined over the attribute set,
+which serves as the basis for granulating the universe and establishing neighborhood relations.
+
+\textbf{Definition 1} \cite{ref14}. Let \(IS = (U, A, V, f)\) be a neighborhood information system.
+For \(x \in U\), an attribute subset \(B \subseteq A\), and a radius \(\varepsilon \geq 0\), the
+\(\varepsilon\)-neighborhood of object \(x\) with respect to \(B\) is defined as:
+\begin{equation}
+N_{B}^{\varepsilon}(x) = \left\{ y \in U \mid d_{B}(x, y) \leq \varepsilon \right\},
+\end{equation}
+where \(d_{B}: U \times U \rightarrow \mathbb{R}^{+}\) is a distance function. That is,
+\(N_{B}^{\varepsilon}(x)\) collects all objects whose distance from \(x\) on the attribute subset \(B\)
+does not exceed \(\varepsilon\).
+
+The neighborhood relation induced on \(U\) by \(B\) is defined as:
+\begin{equation}
+NR_{B}^{\varepsilon} = \{(x, y) \in U \times U \mid y \in N_{B}^{\varepsilon}(x)\}.
+\end{equation}
+
+This relation is reflexive and symmetric. A neighborhood cover (also known as neighborhood knowledge)
+of \(U\) is constituted by the quotient set
+\(U / NR_{B}^{\varepsilon} = \{N_{B}^{\varepsilon}(x) \mid x \in U\}\), and the underlying granular
+structure for subsequent analysis is established based on this cover.
+
+A neighborhood information system (NIS) is then defined as
+\(NIS = (U, NR_{A}^{\varepsilon}, V, f)\), where \(NR_{A}^{\varepsilon}\) denotes the neighborhood
+relation induced by the full attribute set \(A\). When a decision attribute \(D\) is present, the system
+can extend to a neighborhood decision system (NDS):
+\(NDS = (U, NR_{C}^{\varepsilon} \cup D, V, f)\), where \(C \subseteq A\) denotes the set of conditional
+attributes and \(D\) is the decision attribute.
+
+\subsection{Graph Convolutional Networks}
+
+Graph Convolutional Networks (GCNs) \cite{ref21} extend the convolution operation from image data to
+graph-structured data. Given a graph with adjacency matrix \(M \in \mathbb{R}^{n \times n}\) and node
+feature matrix \(X \in \mathbb{R}^{n \times m}\), each GCN layer updates node representations by
+aggregating information from neighboring nodes:
+\begin{equation}
+H^{(l+1)} = \sigma\left( \widehat{M} H^{(l)} W^{(l)} \right),
+\end{equation}
+where \(\widehat{M} = \widetilde{D}^{-\frac{1}{2}} \widetilde{M} \widetilde{D}^{-\frac{1}{2}}\) denotes
+the symmetrically normalized adjacency matrix with added self-loops, i.e.,
+\(\widetilde{M} = M + I_{n}\), and \(\widetilde{D}\) is the corresponding degree matrix.
+\(H^{(l)}\) are the node representations at layer \(l\), with \(H^{(0)} = X\), and \(W^{(l)}\) is a
+trainable weight matrix. \(\sigma\) is a non-linear activation function, typically set to ReLU.
+
+For a two-layer GCN, the forward propagation is:
+\begin{equation}
+Z = \text{softmax}\left( \widehat{M} \cdot \text{ReLU}\left( \widehat{M} X W^{(0)} \right) W^{(1)} \right),
+\end{equation}
+where \(Z \in \mathbb{R}^{n \times 2}\) produces a probability distribution over the normal and anomalous classes.
+
+In the semi-supervised setting, the model is trained with a masked cross-entropy loss that only accounts
+for labeled nodes:
+\begin{equation}
+\mathcal{L} = \sum_{i \in \mathcal{L}_{L}} \sum_{c=1}^{2} Y_{ic} \ln Z_{ic},
+\end{equation}
+where \(\mathcal{L}_{L}\) denotes the set of labeled nodes, \(Y_{ic}\) is the ground-truth label indicator
+(i.e., \(Y_{ic} = 1\) if node \(i\) belongs to class \(c\), and otherwise 0), and \(Z_{ic}\) is the
+predicted probability that node \(i\) belongs to class \(c\).
+
+% ===================================================================
+\section{Proposed Method}
+% ===================================================================
+Building upon the neighborhood information system and GCN introduced in Section~2, this section presents
+the proposed anomaly detection framework. The core idea is to construct a graph based on structural
+similarity---quantified by Neighborhood Mutual Information (NMI)---rather than conventional feature
+distance, and then perform semi-supervised anomaly detection on this graph using a two-layer GCN.
+As illustrated in Fig.~\ref{fig:framework}, the framework consists of three stages: (1) neighborhood
+system construction; (2) NMI-based graph construction; and (3) GCN-based anomaly detection. The
+remainder of this section details each stage in sequence, followed by the algorithm summary and
+complexity analysis.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{framework.pdf}
+\caption{Overview of the proposed framework.}
+\label{fig:framework}
+\end{figure}
+
+\subsection{Neighborhood System Construction}
+
+Given an information system \(IS = (U, A, V, f)\), the construction of neighborhood knowledge requires
+a distance metric and a set of per-attribute thresholds. In Section~2.1, the classical neighborhood
+system is defined based on a global distance function \(d_{A}\) over the full attribute set \(A\) with a
+unified radius \(\varepsilon\). However, when dealing with mixed-attribute data containing both numerical
+and categorical features, such a global formulation may fail to capture the heterogeneous characteristics
+of different attributes. To address this limitation, the Heterogeneous Euclidean-Overlap Metric (HEOM)
+\cite{ref15} is adopted as the distance function.
+
+For \(x, y \in U\), the HEOM distance \(\text{HEOM}_{A}(x, y)\) with respect to \(A\) is defined as:
+\begin{equation}
+\text{HEOM}_{A}(x, y) = \sqrt{\sum_{a \in A} d_{a}(x, y)^{2}},
+\end{equation}
+where \(d_{a}(x, y)\) denotes the component-wise distance under attribute \(a\), given by:
+\begin{equation}
+d_{a}(x, y) = \begin{cases}
+0, & \text{if } a \text{ is categorical and } f(x,a) = f(y,a); \\
+1, & \text{if } a \text{ is categorical and } f(x,a) \neq f(y,a); \\
+|f(x,a) - f(y,a)|, & \text{if } a \text{ is numerical}.
+\end{cases}
+\end{equation}
+
+The distance \(d_{a}(x, y)\) is bounded in \([0, 1]\), where 0 indicates that two objects are identical
+or highly similar on attribute \(a\), and 1 indicates they are completely different or incomparable. To
+ensure this, all numerical attributes are preprocessed using min-max normalization before distance
+computation.
+
+Instead of relying on a single global radius for all attributes, we compute an adaptive radius for each
+numerical attribute. The radius is determined based on the standard deviation of the attribute and an
+entropy-based adjustment factor.
+
+\textbf{Definition 2.} For a numerical attribute \(a \in A\), let the objects in \(U\) be sorted in
+ascending order of their values on \(a\): \(v_{1} \leq v_{2} \leq \cdots \leq v_{n}\), where
+\(v_{i} = f(x_{i}, a)\). The gaps between adjacent values are computed as
+\(\text{gap}_{i} = v_{i+1} - v_{i},\; i = 1, 2, \cdots, n-1\). Using the standard deviation
+\(\text{std}(a)\) as the threshold, the sorted sequence is split into connected components
+\(C = \{C_{1}, C_{2}, \cdots, C_{k}\}\) by cutting at positions where \(\text{gap}_{i} > \text{std}(a)\).
+The attribute neighborhood entropy is then defined as:
+\begin{equation}
+NE(a) = -\sum_{C_{i} \in C} \frac{|C_{i}|}{|U|} \log_{2} \frac{|C_{i}|}{|U|}.
+\end{equation}
+
+This entropy measures the uniformity of the attribute's value distribution after partitioning by the
+standard deviation-based gap threshold. Based on this entropy, the density factor \(\rho_{a}\) is
+computed as:
+\begin{equation}
+\rho_{a} = 1 - \frac{NE(a)}{\log_{2}|U|},
+\end{equation}
+which ranges from 0 to 1. The adaptive radius \(\varepsilon_{a}\) for attribute \(a\) is then defined as:
+\begin{equation}
+\varepsilon_{a} = \begin{cases}
+0, & \text{if } a \text{ is categorical}; \\[6pt]
+\displaystyle\frac{\text{std}(a)}{1 + \rho_{a}}, & \text{if } a \text{ is numerical}.
+\end{cases}
+\end{equation}
+where \(\text{std}(a)\) represents the standard deviation of attribute \(a\). The overall procedure is
+summarized in Algorithm~1.
+
+\begin{algorithm}[!t]
+\caption{Neighborhood and Adaptive Radius Construction (NARC)}
+\label{alg:narc}
+\begin{algorithmic}
+\STATE \textbf{Input:} Information system \(IS = (U, A, V, f)\), where \(A = A_{num} \cup A_{cat}\),
+       with \(A_{num}\) and \(A_{cat}\) being the sets of numerical and categorical attributes,
+       respectively, \(n = |U|\).
+\STATE \textbf{Output:} Adaptive radius set \(\varepsilon = \{\varepsilon_{a} \mid a \in A\}\),
+       neighborhood knowledge \(N = \{N_{a}(x) \mid x \in U, a \in A\}\).
+\STATE
+\STATE // Min-max normalization for numerical attributes
+\FOR{each \(a \in A_{num}\)}
+    \STATE \(\max_{a} \leftarrow \max\{f(x,a) \mid x \in U\}\)
+    \STATE \(\min_{a} \leftarrow \min\{f(x,a) \mid x \in U\}\)
+    \FOR{each \(x \in U\)}
+        \STATE \(f(x,a) \leftarrow (f(x,a) - \min_{a}) / (\max_{a} - \min_{a})\)
+    \ENDFOR
+\ENDFOR
+\STATE
+\STATE // Compute standard deviation for each numerical attribute
+\FOR{each \(a \in A_{num}\)}
+    \STATE \(\sigma_{a} \leftarrow \text{std}(f(x,a) \mid x \in U)\)
+    \IF{\(\sigma_{a} = 0\)} \STATE \(\sigma_{a} \leftarrow 10^{-6}\) \ENDIF
+\ENDFOR
+\STATE
+\STATE // Compute attribute neighborhood entropy and adaptive radius
+\FOR{each \(a \in A_{num}\)}
+    \STATE Sort \(U\) by \(f(x,a)\) ascending: \(v_{1} \leq v_{2} \leq \cdots \leq v_{n}\)
+    \STATE Compute gaps: \(\text{gap}_{i} \leftarrow v_{i+1} - v_{i}\) for \(i = 1, \dots, n-1\)
+    \STATE Partition sorted \(U\) into components \(C = \{C_{1}, \dots, C_{k}\}\) where consecutive
+            objects belong to the same component if their gap does not exceed \(\sigma_{a}\)
+    \STATE Compute \(NE(a)\) by Eq.~(8)
+    \STATE Compute \(\varepsilon_{a}\) by Eq.~(10)
+\ENDFOR
+\STATE
+\STATE // Build final neighborhoods
+\FOR{each \(x \in U\)}
+    \FOR{each \(a \in A\)}
+        \IF{\(a \in A_{num}\)}
+            \STATE \(N_{a}(x) = \{y \in U \mid |f(x,a) - f(y,a)| \leq \varepsilon_{a}\}\)
+        \ELSE
+            \STATE \(N_{a}(x) = \{y \in U \mid f(x,a) = f(y,a)\}\)
+        \ENDIF
+    \ENDFOR
+\ENDFOR
+\STATE \textbf{return} \(\varepsilon, N\)
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{NMI-Based Graph Construction}
+
+In anomaly detection, whether an object is abnormal depends not only on its individual attribute values,
+but also on its relational context with other objects. An object that deviates from the local structural
+patterns of the majority is more likely to be an outlier. Therefore, it is necessary to characterize the
+structural relationships between objects in a way that captures how similarly they are embedded in the
+local neighborhood structure. For achieving this, a graph is constructed by considering the structural
+similarity between objects. Before constructing the graph, however, a measure is required to quantify
+such similarity between two objects.
+
+A natural intuition is that two objects should be considered structurally similar if their neighborhoods
+share common elements. This idea is analogous to the concept of mutual information in information theory,
+where two random variables are considered correlated if they share information. Motivated by this, the
+Neighborhood Mutual Information (NMI) between two objects is defined to measure the shared structural
+information between their neighborhood knowledge. To formally define NMI, the neighborhood information
+entropy is first introduced as follows.
+
+\textbf{Definition 3.} Given the neighborhood knowledge
+\(\mathbb{N}(x) = \{N^{\varepsilon_{a}}(x) \mid a \in A\} = \{N_{1}, \ldots, N_{k}\}\) of object
+\(x \in U\) with respect to \(A\), the object neighborhood entropy of \(x\) is defined as:
+\begin{equation}
+NE(x) = -\sum_{i \in [1, k]} \frac{|N_{i}|}{|U|} \log_{2} \frac{|N_{i}|}{|U|}.
+\end{equation}
+
+\textbf{Definition 4.} For objects \(x, y \in U\), the neighborhood joint entropy with respect to
+attribute set \(A\) is defined as:
+\begin{equation}
+NJE(x, y) = -\sum_{N_{i} \in \mathbb{N}(x)} \sum_{N_{j} \in \mathbb{N}(y)}
+            \frac{|N_{i} \cap N_{j}|}{|U|} \log_{2} \frac{|N_{i} \cap N_{j}|}{|U|}.
+\end{equation}
+
+\textbf{Definition 5.} The neighborhood mutual information between two objects \(x, y \in U\) with
+respect to attribute set \(A\) is defined as:
+\begin{equation}
+NMI(x, y) = NE(x) + NE(y) - NJE(x, y).
+\end{equation}
+
+The expanded form is:
+\begin{equation}
+NMI(x, y) = -\sum_{N_{i} \in \mathbb{N}(x)} \sum_{N_{j} \in \mathbb{N}(y)}
+            \frac{|N_{i} \cap N_{j}|}{|U|}
+            \log_{2} \frac{|N_{i} \cap N_{j}| \cdot |U|}{|N_{i}| \cdot |N_{j}|},
+\end{equation}
+with the convention that \(0 \log_{2} 0 = 0\).
+
+The NMI measure satisfies the following properties:
+
+\noindent \textbf{(1) Non-negativity.} \(NMI(x, y) \geq 0\), with equality if and only if
+\(N_{i} \cap N_{j} = \varnothing\) for all \(N_{i} \in \mathbb{N}(x)\) and
+\(N_{j} \in \mathbb{N}(y)\), i.e., when the neighborhood structures of \(x\) and \(y\) have no overlap
+across any attribute.
+
+\noindent \textbf{(2) Symmetry.} \(NMI(x, y) = NMI(y, x)\), which follows directly from the symmetric
+construction and ensures that the resulting graph is undirected.
+
+\noindent \textbf{(3) Structural discriminability.} A larger NMI value indicates stronger structural
+similarity between the two objects, suggesting that they reside in comparable local contexts across
+multiple attribute views. In contrast, a small NMI implies that the two objects have distinct
+neighborhood configurations, which is typical for anomalous instances that deviate from the majority.
+
+Based on NMI, a weighted undirected graph \(G = (V, E, W)\) can be constructed, where each object
+\(x \in U\) serves as a node. The weight \(w_{xy}\) of the edge between two nodes \(x\) and \(y\) is
+defined as:
+\begin{equation}
+w_{xy} = \frac{NMI(x, y)}{\sqrt{NE(x) \cdot NE(y)}}.
+\end{equation}
+
+Obviously, the edge weight is confined to the unit interval. This follows from the fact that
+\(NMI(x, y) \leq \min\{NE(x), NE(y)\} \leq \sqrt{NE(x) \cdot NE(y)}\), it follows that
+\(w_{xy} \in [0, 1]\), and specifically \(w_{xx} = 1\) when \(x = y\).
+
+To reduce graph density and suppress noisy connections, a threshold-based sparsification strategy is
+applied. The entries of the resulting sparse adjacency matrix \(M\):
+\begin{equation}
+M_{xy} = \begin{cases}
+w_{xy}, & \text{if } w_{xy} \geq \tau, \\
+0, & \text{otherwise}.
+\end{cases}
+\end{equation}
+where \(\tau \in [0, 1]\) is a pre-defined threshold. The NMI-based graph construction process is
+detailed in Algorithm~2.
+
+\begin{algorithm}[!t]
+\caption{NMI-based Graph Construction (NGC)}
+\label{alg:ngc}
+\begin{algorithmic}
+\STATE \textbf{Input:} Information system \(IS = (U, A, V, f)\), \(n = |U|\),
+       \(\varepsilon, N\) (from Algorithm~1), threshold \(\tau\)
+\STATE \textbf{Output:} Normalized adjacency matrix \(M \in \mathbb{R}^{n \times n}\)
+\STATE
+\STATE // Compute neighborhood information entropy \(NE(x)\) (Eq.~11)
+\FOR{each \(x \in U\)}
+    \STATE \(NE(x) \leftarrow 0\)
+    \FOR{each \(a \in A\)}
+        \STATE \(p \leftarrow |N_{a}(x)| / n\)
+        \IF{\(p > 0\)}
+            \STATE \(NE(x) \leftarrow NE(x) - p \cdot \log_{2}(p)\)
+        \ENDIF
+    \ENDFOR
+\ENDFOR
+\STATE
+\STATE // Compute Neighborhood Mutual Information \(NMI(x, y)\) (Eq.~14)
+\FOR{each \(x_{i}, x_{j} \in U\)}
+    \STATE \(NMI(x_{i}, x_{j}) \leftarrow 0\)
+    \FOR{each \(a \in A\)}
+        \STATE \(I_{a} \leftarrow |N_{a}(x_{i}) \cap N_{a}(x_{j})|\)
+        \IF{\(I_{a} > 0\)}
+            \STATE \(\text{ratio} \leftarrow (I_{a} \cdot n) / (|N_{a}(x_{i})| \cdot |N_{a}(x_{j})|)\)
+            \STATE \(NMI(x_{i}, x_{j}) \leftarrow NMI(x_{i}, x_{j}) + (I_{a} / n) \cdot \log_{2}(\text{ratio})\)
+        \ENDIF
+    \ENDFOR
+\ENDFOR
+\STATE // Set self-NMI = object entropy
+\FOR{each \(x_{i} \in U\)}
+    \STATE \(NMI(x_{i}, x_{i}) \leftarrow NE(x_{i})\)
+\ENDFOR
+\STATE
+\STATE // Compute edge weights (Eq.~15)
+\FOR{each \(x_{i}, x_{j} \in U\)}
+    \STATE \(w_{ij} \leftarrow NMI(x_{i}, x_{j}) / \sqrt{NE(x_{i}) \cdot NE(x_{j})}\)
+\ENDFOR
+\STATE // Set self-loops to 1
+\FOR{each \(x_{i} \in U\)} \STATE \(w_{ii} \leftarrow 1\) \ENDFOR
+\STATE
+\STATE // Threshold sparsification (Eq.~16)
+\FOR{each \(i, j \in 1, \dots, n\)}
+    \IF{\(w_{ij} < \tau\)} \STATE \(M_{ij} \leftarrow 0\)
+    \ELSE \STATE \(M_{ij} \leftarrow w_{ij}\) \ENDIF
+\ENDFOR
+\STATE
+\STATE // Symmetric normalization \(D^{-1/2} M D^{-1/2}\)
+\FOR{each \(i \in 1, \dots, n\)}
+    \STATE \(d_{i} \leftarrow \sum_{j=1}^{n} M_{ij}\)
+    \IF{\(d_{i} > 0\)} \STATE \(D_{\text{inv}, ii} \leftarrow d_{i}^{-1/2}\)
+    \ELSE \STATE \(D_{\text{inv}, ii} \leftarrow 0\) \ENDIF
+\ENDFOR
+\STATE \(M \leftarrow D_{\text{inv}} \cdot M \cdot D_{\text{inv}}\)
+\STATE \textbf{return} \(M\)
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{GCN-Based Anomaly Detection}
+
+With the sparse graph \(M \in \mathbb{R}^{n \times n}\) constructed in the previous stage, anomaly
+detection is performed using a two-layer GCN in a semi-supervised manner. The GCN propagation rule and
+masked cross-entropy loss introduced in Section~2.2 are applied, with the adjacency matrix set to
+\(\widehat{M} = \widetilde{D}^{-\frac{1}{2}} \widetilde{M} \widetilde{D}^{-\frac{1}{2}}\).
+
+After training, the anomaly score of each node \(x \in U\) is defined as the predicted probability of
+belonging to the anomalous class:
+\begin{equation}
+S(x) = Z_{x2},
+\end{equation}
+where \(Z\) is the output of GCN, and \(Z_{x2}\) is the second element of the output probability vector
+for node \(x\). A higher score indicates a greater likelihood of being an anomaly.
+
+To determine the final set of outliers, an automatic threshold selection strategy based on the F1-score
+is adopted. The nodes are first sorted in descending order of their anomaly scores, and candidate
+thresholds are then evaluated at the top 1\% position, subsequently every 5\% up to 10\%, and every
+10\% beyond 50\%. Since anomalies typically constitute only a small fraction of the dataset, the most
+suspicious candidates are concentrated on by this search strategy, while computational efficiency is
+maintained. The threshold that yields the highest \(F_{1}\) score on the labeled validation set is
+finally selected for outlier identification.
+
+\subsection{Illustrative Example}
+
+To illustrate the proposed framework step by step, this subsection provides an example with the
+information system \(IS = (U, A, V, f)\) in Table~\ref{tab:example_is}, where
+\(U = \{x_{1}, x_{2}, x_{3}, x_{4}, x_{5}\}\), \(A = \{a, b, c\}\).
+
+\begin{table}[!t]
+\caption{The information system \(IS = (U, A, V, f)\)}
+\label{tab:example_is}
+\centering
+\begin{tabular}{cccc}
+\toprule
+\(U\) & \(a\) & \(b\) & \(c\) \\
+\midrule
+\(x_{1}\) & 0.2 & 0.8 & X \\
+\(x_{2}\) & 0.3 & 0.7 & X \\
+\(x_{3}\) & 0.9 & 0.2 & Y \\
+\(x_{4}\) & 0.1 & 0.9 & X \\
+\(x_{5}\) & 0.9 & 0.3 & Y \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{(1) Compute the mean and standard deviation of numerical attributes:}
+\(\mu_{a} = 0.48\), \(\sigma_{a} = 0.3487\); \(\mu_{b} = 0.58\), \(\sigma_{b} = 0.2786\);
+\(\sigma_{c} = 0\).
+
+\textbf{(2) Compute the attribute neighborhood entropy for each attribute.} Taking attribute \(a\) as
+an example, the objects \(U\) are sorted by their values of \(a\):
+\[
+x_{4}(0.1) \leq x_{1}(0.2) \leq x_{2}(0.3) \leq x_{3}(0.9) \leq x_{5}(0.9).
+\]
+The gaps between consecutive values are:
+\[
+0.2-0.1 = 0.1,\; 0.3-0.2 = 0.1,\; 0.9-0.3 = 0.6,\; 0.9-0.9 = 0.
+\]
+With threshold \(\sigma_{a} = 0.3487\), the sorted sequence is split at the gap \(0.6 > 0.3487\),
+yielding two connected components:
+\[
+C_{1} = \{x_{1}, x_{2}, x_{4}\},\quad C_{2} = \{x_{3}, x_{5}\}.
+\]
+By Definition~2,
+\(NE(a) = -\frac{3}{5}\log_{2}\frac{3}{5} - \frac{2}{5}\log_{2}\frac{2}{5} \approx 0.9710\).
+
+Similarly,
+\(NE(b) = -\frac{2}{5}\log_{2}\frac{2}{5} - \frac{3}{5}\log_{2}\frac{3}{5} \approx 0.9710\),
+and for categorical attribute \(c\),
+\(NE(c) = -\frac{3}{5}\log_{2}\frac{3}{5} - \frac{2}{5}\log_{2}\frac{2}{5} \approx 0.9710\).
+
+\textbf{(3) Compute the adaptive radii for each attribute by Definition~2:}
+\begin{align*}
+\varepsilon_{a} &= \frac{\sigma_{a}}{1 + \rho_{a}} = \frac{0.3487}{1 + 0.5818} \approx 0.2204, \\
+\varepsilon_{b} &= \frac{\sigma_{b}}{1 + \rho_{b}} = \frac{0.2786}{1 + 0.5818} \approx 0.1761, \\
+\varepsilon_{c} &= 0,
+\end{align*}
+in which
+\[
+\rho_{a} = 1 - \frac{NE(a)}{\log_{2}|U|} = 1 - \frac{0.9710}{2.3219} = 0.5818,\quad
+\rho_{b} = 1 - \frac{NE(b)}{\log_{2}|U|} = 1 - \frac{0.9710}{2.3219} = 0.5818,\quad
+\rho_{c} = 0.
+\]
+
+By Definition~1 and the adaptive radii above, the neighborhood knowledge is obtained and summarized in
+Table~\ref{tab:neighborhood}.
+
+\begin{table}[!t]
+\caption{The neighborhood knowledge of \(IS\) in Table~1}
+\label{tab:neighborhood}
+\centering
+\begin{tabular}{cccc}
+\toprule
+& \(N^{\varepsilon_{a}}(x)\) & \(N^{\varepsilon_{b}}(x)\) & \(N^{\varepsilon_{c}}(x)\) \\
+\midrule
+\(x_{1}\) & \(x_{1},x_{2},x_{4}\) & \(x_{1},x_{2},x_{4}\) & \(x_{1},x_{2},x_{4}\) \\
+\(x_{2}\) & \(x_{1},x_{2},x_{4}\) & \(x_{1},x_{2}\) & \(x_{1},x_{2},x_{4}\) \\
+\(x_{3}\) & \(x_{3},x_{5}\) & \(x_{3},x_{5}\) & \(x_{3},x_{5}\) \\
+\(x_{4}\) & \(x_{1},x_{2},x_{4}\) & \(x_{1},x_{4}\) & \(x_{1},x_{2},x_{4}\) \\
+\(x_{5}\) & \(x_{3},x_{5}\) & \(x_{3},x_{5}\) & \(x_{3},x_{5}\) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{(4) Compute neighborhood information entropy for each object:}
+\begin{align*}
+NE(x_{1}) &= (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) + (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) + (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) \approx 1.3266,\\
+NE(x_{2}) &= (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) + (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) + (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) \approx 1.4132,\\
+NE(x_{3}) &= (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) + (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) + (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) \approx 1.5864,\\
+NE(x_{4}) &= (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) + (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) + (-\tfrac{3}{5}\log_{2}\tfrac{3}{5}) \approx 1.4132,\\
+NE(x_{5}) &= (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) + (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) + (-\tfrac{2}{5}\log_{2}\tfrac{2}{5}) \approx 1.5864.
+\end{align*}
+
+\textbf{(5)} By Definition~5, the neighborhood mutual information between all pairs of objects is
+computed, and the results are shown in Table~\ref{tab:nmi}.
+
+\begin{table}[!t]
+\caption{Neighborhood mutual information}
+\label{tab:nmi}
+\centering
+\begin{tabular}{cccccc}
+\toprule
+& \(x_{1}\) & \(x_{2}\) & \(x_{3}\) & \(x_{4}\) & \(x_{5}\) \\
+\midrule
+\(x_{1}\) & 1.3266 & 1.1792 & 0 & 1.1792 & 0 \\
+\(x_{2}\) & 1.1792 & 1.4132 & 0 & 0.9488 & 0 \\
+\(x_{3}\) & 0 & 0 & 1.5864 & 0 & 1.5864 \\
+\(x_{4}\) & 1.1792 & 0.9488 & 0 & 1.4132 & 0 \\
+\(x_{5}\) & 0 & 0 & 1.5864 & 0 & 1.5864 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{(6)} Edge weights are computed by Eq.~(15). The resulting weight matrix is shown in
+Table~\ref{tab:weights}, and the corresponding graph is illustrated in Fig.~\ref{fig:example_graph}.
+
+\begin{table}[!t]
+\caption{Normalized neighborhood mutual information (edge weights)}
+\label{tab:weights}
+\centering
+\begin{tabular}{cccccc}
+\toprule
+& \(x_{1}\) & \(x_{2}\) & \(x_{3}\) & \(x_{4}\) & \(x_{5}\) \\
+\midrule
+\(x_{1}\) & 1 & 0.8612 & 0 & 0.8612 & 0 \\
+\(x_{2}\) & 0.8612 & 1 & 0 & 0.6713 & 0 \\
+\(x_{3}\) & 0 & 0 & 1 & 0 & 1 \\
+\(x_{4}\) & 0.8612 & 0.6713 & 0 & 1 & 0 \\
+\(x_{5}\) & 0 & 0 & 1 & 0 & 1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=0.7\columnwidth]{example_graph.pdf}
+\caption{The constructed NMI graph.}
+\label{fig:example_graph}
+\end{figure}
+
+% ===================================================================
+\section{Experiments}
+% ===================================================================
+[To be completed: comprehensive experimental evaluation including data preprocessing,
+comparison algorithms, parameter settings, and detailed analysis of results.]
+
+\subsection{Data Preprocessing}
+[To be completed.]
+
+\subsection{Comparison Algorithms and Parameter Settings}
+[To be completed.]
+
+\subsection{Experimental Results and Analysis}
+[To be completed: Precision, Recall, F1-score, AUC comparison tables; ROC/F1 curve analysis;
+ablation study; statistical significance tests.]
+
+\subsection{Parameter Sensitivity Analysis}
+[To be completed.]
+
+\subsection{Discussion}
+[To be completed.]
+
+% ===================================================================
+\section{Conclusion}
+% ===================================================================
+[To be completed.]
+
+% ===================================================================
+\section*{Acknowledgments}
+% ===================================================================
+[To be completed.]
+
+% ===================================================================
+% References
+% ===================================================================
+\begin{thebibliography}{99}
+\bibliographystyle{IEEEtran}
+
+\bibitem{ref1}
+V.~Chandola, A.~Banerjee, and V.~Kumar, ``Anomaly detection: A survey,''
+\textit{ACM Comput. Surv.}, vol.~41, no.~3, pp.~1--58, 2009.
+
+\bibitem{ref2}
+C.~C.~Aggarwal, \textit{Outlier Analysis}, 2nd~ed. Springer, 2017.
+
+\bibitem{ref3}
+E.~W.~Ngai, Y.~Hu, Y.~H.~Wong, Y.~Chen, and X.~Sun, ``The application of data mining
+techniques in financial fraud detection,'' \textit{Decis. Support Syst.}, vol.~50, no.~3,
+pp.~559--569, 2011.
+
+\bibitem{ref4}
+A.~L.~Buczak and E.~Guven, ``A survey of data mining and machine learning methods for
+cyber security intrusion detection,'' \textit{IEEE Commun. Surveys Tuts.}, vol.~18, no.~2,
+pp.~1153--1176, 2016.
+
+\bibitem{ref5}
+P.~J.~Rousseeuw and A.~M.~Leroy, \textit{Robust Regression and Outlier Detection}.
+John Wiley \& Sons, 1987.
+
+\bibitem{ref6}
+P.~Cunningham and S.~J.~Delany, ``$K$-nearest neighbour classifiers (with Python examples),''
+\textit{arXiv preprint arXiv:2004.04523}, 2020.
+
+\bibitem{ref7}
+M.~M.~Breunig, H.-P.~Kriegel, R.~T.~Ng, and J.~Sander, ``LOF: Identifying density-based
+local outliers,'' in \textit{Proc. ACM SIGMOD}, 2000, pp.~93--104.
+
+\bibitem{ref8}
+Z.~He, X.~Xu, and S.~Deng, ``Discovering cluster-based local outliers,''
+\textit{Pattern Recognit. Lett.}, vol.~24, no.~9--10, pp.~1641--1650, 2003.
+
+\bibitem{ref9}
+G.~Pang, L.~Cao, L.~Chen, and H.~Liu, ``Unsupervised feature selection for outlier detection
+by modelling hierarchical value-feature couplings,'' in \textit{Proc. ICDM}, 2016, pp.~410--419.
+
+\bibitem{ref10}
+J.~He, Q.~Xu, Y.~Jiang, Z.~Wang, and Q.~Huang, ``ADA-GAD: Anomaly-denoised autoencoders
+for graph anomaly detection,'' in \textit{Proc. AAAI}, vol.~38, 2024, pp.~8481--8489.
+
+\bibitem{ref11}
+Z.~Pawlak, ``Rough sets,'' \textit{Int. J. Comput. Inf. Sci.}, vol.~11, no.~5, pp.~341--356, 1982.
+
+\bibitem{ref12}
+T.~Y.~Lin, ``Neighborhood systems and relational databases,'' in \textit{Proc. 16th ACM Annu.
+Conf. Comput. Sci.}, 1988, p.~725.
+
+\bibitem{ref13}
+Q.~H.~Hu, D.~R.~Yu, J.~F.~Liu, and C.~X.~Wu, ``Neighborhood rough set based heterogeneous
+feature subset selection,'' \textit{Inf. Sci.}, vol.~178, no.~18, pp.~3577--3594, 2008.
+
+\bibitem{ref14}
+Z.~Yuan, X.~Zhang, and S.~Feng, ``Hybrid data-driven outlier detection based on neighborhood
+information entropy and its developmental measures,'' \textit{Expert Syst. Appl.}, vol.~112,
+pp.~243--257, 2018.
+
+\bibitem{ref15}
+D.~R.~Wilson and T.~R.~Martinez, ``Improved heterogeneous distance functions,''
+\textit{J. Artif. Intell. Res.}, vol.~6, no.~1, pp.~1--34, 1997.
+
+\bibitem{ref16}
+Z.~Yuan, H.~Chen, T.~Li, J.~Liu, and S.~Wang, ``Anomaly detection based on fuzzy neighborhood
+rough sets,'' \textit{Inf. Sci.}, vol.~709, p.~122075, 2025.
+
+\bibitem{ref17}
+R.~Wille, ``Restructuring lattice theory: An approach based on hierarchies of concepts,''
+in \textit{Ordered Sets}. Springer, 1982.
+
+\bibitem{ref18}
+B.~Ganter and R.~Wille, \textit{Formal Concept Analysis: Mathematical Foundations}. Springer, 2012.
+
+\bibitem{ref19}
+Q.~Hu, K.~Qin, L.~Zhang, and J.~Li, ``A novel outlier detection approach based on formal
+concept analysis,'' \textit{Knowl.-Based Syst.}, vol.~268, p.~110486, 2023.
+
+\bibitem{ref20}
+J.~Li, K.~Qin, L.~Zhang, and Q.~Hu, ``Dual-aspect synergistic outlier detection with
+structural deviation and attribute rarity,'' \textit{Pattern Recognit.}, vol.~180, p.~114084, 2026.
+
+\bibitem{ref21}
+T.~N.~Kipf and M.~Welling, ``Semi-supervised classification with graph convolutional networks,''
+in \textit{Proc. ICLR}, 2017.
+
+\bibitem{ref22}
+A.~Goodge, B.~Hooi, S.~K.~Ng, and W.~S.~Ng, ``LUNAR: Unifying local outlier detection methods
+via graph neural networks,'' in \textit{Proc. AAAI}, vol.~36, no.~6, 2022, pp.~6737--6745.
+
+\bibitem{ref23}
+K.~Ding, J.~Li, R.~Bhanushali, and H.~Liu, ``Deep anomaly detection on attributed networks,''
+in \textit{Proc. SDM}, 2019, pp.~594--602.
+
+\bibitem{ref24}
+X.~Du, J.~Li, Z.~Chen, and Y.~Wang, ``Graph autoencoder-based unsupervised outlier detection,''
+\textit{Inf. Sci.}, vol.~608, pp.~532--550, 2022.
+
+\bibitem{ref25}
+Q.~Li, Z.~Han, and X.-M.~Wu, ``Deeper insights into graph convolutional networks for
+semi-supervised learning,'' in \textit{Proc. AAAI}, vol.~32, no.~1, 2018.
+
+\bibitem{ref26}
+K.~Liu, Y.~Dou, Y.~Zhao, X.~Ding, X.~Hu, R.~Zhang, K.~Ding, C.~Chen, H.~Peng, K.~Shu,
+\textit{et al.}, ``Graph-based anomaly detection and deep learning: A comprehensive survey,''
+\textit{ACM Comput. Surv.}, vol.~55, no.~8, pp.~1--37, 2022.
+
+\bibitem{ref27}
+F.~Jiang, Y.~Sui, and C.~Cao, ``An information entropy-based approach to outlier detection
+in rough sets,'' \textit{Expert Syst. Appl.}, vol.~37, no.~9, pp.~6338--6344, 2010.
+
+\bibitem{ref28}
+G.~Pang, C.~Shen, L.~Cao, and A.~V.~D.~Hengel, ``Deep learning for anomaly detection: A review,''
+\textit{ACM Comput. Surv.}, vol.~54, no.~2, pp.~1--38, 2021.
+
+\bibitem{ref29}
+G.~Duan, H.~Lv, H.~Wang, and G.~Feng, ``Application of a dynamic line graph neural network
+for intrusion detection,'' \textit{IEEE Trans. Inf. Forensics Secur.}, vol.~18, pp.~699--714, 2023.
+
+\bibitem{ref30}
+H.~Yuan, H.~Yu, S.~Gui, and S.~Ji, ``Explainability in graph neural networks: A taxonomic survey,''
+\textit{IEEE Trans. Pattern Anal. Mach. Intell.}, vol.~45, no.~5, pp.~6352--6372, 2022.
+
+\bibitem{ref31}
+S.~M.~Lundberg and S.-I.~Lee, ``A unified approach to interpreting model predictions,''
+in \textit{Proc. NeurIPS}, vol.~30, 2017.
+
+\bibitem{ref32}
+W.~Hamilton, Z.~Ying, and J.~Leskovec, ``Inductive representation learning on large graphs,''
+in \textit{Proc. NeurIPS}, vol.~30, 2017.
+
+\bibitem{ref33}
+M.~Feurer and F.~Hutter, ``Hyperparameter optimization,'' in \textit{Automated Machine Learning},
+Springer, 2019, pp.~3--33.
+
+\bibitem{ref34}
+C.~Z.~Wang, Q.~H.~Hu, X.~Z.~Wang, D.~G.~Chen, and Y.~H.~Qian, ``Feature subset selection
+based on fuzzy neighborhood rough sets,'' \textit{Knowl.-Based Syst.}, vol.~111, pp.~173--179, 2016.
+
+\bibitem{ref35}
+X.~Su, J.~Zhou, Y.~Chen, and W.~Pedrycz, ``Identifying outliers via local granular-ball density,''
+\textit{IEEE Trans. Neural Netw. Learn. Syst.}, vol.~36, no.~10, pp.~18956--18967, 2025.
+
+\bibitem{ref36}
+J.~Yang, X.~Yang, J.~Zhou, and Y.~Yao, ``Three-way outlier detection based on shadowed
+granular-balls,'' \textit{IEEE Trans. Fuzzy Syst.}, vol.~34, no.~1, pp.~101--113, 2026.
+
+\bibitem{ref37}
+A.~Roy, J.~Li, and S.~Pan, ``GAD-NR: Graph anomaly detection via neighborhood reconstruction,''
+in \textit{Proc. WSDM}, 2024, pp.~576--585.
+
+\bibitem{ref38}
+N.~Rahimi and R.~Javadi, ``Application of graph autoencoder in outlier detection,''
+\textit{Appl. Soft Comput.}, 2026.
+
+\bibitem{ref39}
+Z.~Qin, L.~Zhang, and K.~Li, ``Enhancing intrusion detection performance using GCN-LOF,''
+\textit{Comput. Netw.}, 2025.
+
+\bibitem{ref40}
+Y.~Y.~Yao, ``Relational interpretations of neighborhood operators,''
+\textit{Inf. Sci.}, vol.~111, no.~1--4, pp.~239--259, 1998.
+
+\bibitem{ref41}
+Y.~M.~Chen, D.~Q.~Miao, and R.~Z.~Wang, ``Neighborhood outlier detection,''
+\textit{Expert Syst. Appl.}, vol.~37, no.~12, pp.~8745--8749, 2010.
+
+\bibitem{ref42}
+L.~A.~Zadeh, ``Fuzzy sets and information granularity,'' in \textit{Advances in Fuzzy Set Theory
+and Applications}, 1979, pp.~3--18.
+
+\bibitem{ref43}
+D.~Dubois and H.~Prade, ``Rough fuzzy sets and fuzzy rough sets,''
+\textit{Int. J. Gen. Syst.}, vol.~17, no.~2--3, pp.~191--209, 1990.
+
+\bibitem{ref44}
+Z.~Yuan, H.~Chen, T.~Li, B.~Sang, and S.~Wang, ``Outlier detection based on fuzzy rough granules
+in mixed attribute data,'' \textit{IEEE Trans. Cybern.}, vol.~52, no.~8, pp.~8399--8412, 2021.
+
+\bibitem{ref45}
+Z.~Li, Y.~Zhao, J.~Han, Y.~Su, R.~Jiao, and X.~Wen, ``A survey on explainable anomaly detection,''
+\textit{ACM Trans. Knowl. Discov. Data}, vol.~18, no.~1, pp.~1--54, 2024.
+
+\bibitem{Mlyahilu2025}
+N.~J.~Mlyahilu and E.~Novikova, ``Graph construction approaches for graph neural networks-based
+anomaly detection in time series,'' preprint, 2025.
+
+\bibitem{Febrinanto2025}
+F.~G.~Febrinanto, K.~Moore, C.~Thapa, M.~Liu, V.~Saikrishna, J.~Ma, and F.~Xia,
+``Entropy causal graphs for multivariate time series anomaly detection,''
+\textit{ACM Trans. Intell. Syst. Technol.}, vol.~16, no.~6, Article~125, 2025.
+
+\bibitem{Pang2024}
+Asymptotic consistent graph structure learning for multivariate time-series anomaly detection, 2024.
+
+\bibitem{He2024}
+S.~He, G.~Li, K.~Xie, and P.~K.~Sharma, ``Fusion graph structure learning-based multivariate
+time series anomaly detection with structured prior knowledge,''
+\textit{IEEE Trans. Inf. Forensics Secur.}, vol.~19, pp.~8760--8772, 2024.
+
+\end{thebibliography}
+
+\end{document}
