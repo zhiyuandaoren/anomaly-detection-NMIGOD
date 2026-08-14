@@ -251,7 +251,9 @@ class AnomalyDetectionFramework:
     # 图构建: k-NN 图 → 对称归一化邻接矩阵
     # ============================================================
     def _build_knn_graph(self, X):
-        """通过 k 近邻构建对称邻接矩阵 (与 GCN 一致)"""
+        """通过 k 近邻构建对称邻接矩阵 (稀疏版本, 适用于大规模 N > 50000)"""
+        from scipy.sparse import coo_matrix, eye
+
         N = X.shape[0]
         k = min(self.k_neighbors, N - 1)
 
@@ -261,31 +263,36 @@ class AnomalyDetectionFramework:
         nbrs.fit(X)
         distances, indices = nbrs.kneighbors(X)
 
-        adj = np.zeros((N, N), dtype=np.float32)
-        for i in range(N):
-            neighbors = indices[i, 1:]
-            adj[i, neighbors] = 1.0
+        # 构建稀疏 COO (不创建 dense N×N)
+        row_idx = np.repeat(np.arange(N), k)
+        col_idx = indices[:, 1:].ravel()
+        data = np.ones(len(row_idx), dtype=np.float32)
+        adj_sparse = coo_matrix((data, (row_idx, col_idx)), shape=(N, N))
+        adj_sparse = adj_sparse.maximum(adj_sparse.T)
+        adj_sparse = adj_sparse + eye(N, dtype=np.float32)
+        adj_sparse = adj_sparse.tocoo()
 
-        adj = np.maximum(adj, adj.T)
+        indices_t = torch.LongTensor(np.vstack([adj_sparse.row, adj_sparse.col]))
+        values_t = torch.FloatTensor(adj_sparse.data)
+        adj_sparse_tensor = torch.sparse_coo_tensor(
+            indices_t, values_t, torch.Size([N, N]), device=self.device)
 
-        adj_tensor = torch.tensor(adj, dtype=torch.float32, device=self.device)
-        adj_self_loop = adj_tensor + torch.eye(N, device=self.device)
-
-        degree = adj_self_loop.sum(dim=1)
+        degree = torch.sparse.sum(adj_sparse_tensor, dim=1).to_dense()
         d_inv_sqrt = torch.pow(degree, -0.5)
-        d_inv_sqrt = torch.where(
-            torch.isinf(d_inv_sqrt),
-            torch.zeros_like(d_inv_sqrt),
-            d_inv_sqrt
-        )
-        d_inv_sqrt_diag = torch.diag(d_inv_sqrt)
+        d_inv_sqrt = torch.where(torch.isinf(d_inv_sqrt),
+                                 torch.zeros_like(d_inv_sqrt), d_inv_sqrt)
 
-        adj_norm = d_inv_sqrt_diag @ adj_self_loop @ d_inv_sqrt_diag
+        d_row = d_inv_sqrt[adj_sparse.row].to(self.device)
+        d_col = d_inv_sqrt[adj_sparse.col].to(self.device)
+        norm_values = d_row * values_t.to(self.device) * d_col
 
-        self.adj = adj_tensor
-        self.adj_norm = adj_norm
-        print(f"[*] 邻接矩阵构建完成, 边数: {int(adj.sum())}, "
-              f"平均度: {adj.sum()/N:.1f}")
+        adj_norm_sparse = torch.sparse_coo_tensor(
+            indices_t, norm_values, torch.Size([N, N]), device=self.device).coalesce()
+
+        self.adj = adj_sparse_tensor.coalesce()
+        self.adj_norm = adj_norm_sparse
+        n_edges = len(adj_sparse.data)
+        print(f"[*] 邻接矩阵构建完成, 边数: {n_edges}, 平均度: {n_edges/N:.1f}")
 
     # ============================================================
     # 半监督数据划分 ()

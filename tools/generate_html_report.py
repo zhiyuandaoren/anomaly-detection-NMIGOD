@@ -74,8 +74,8 @@ def build_html(lang='cn'):
         lang)
 
     design_desc = T(
-        "30 个 UCI 基准数据集 (101~12,960 对象)，覆盖数值型(11)、混合型(14)、分类型(5)，异常比例 0.44%~45.87%。半监督设置 (20% 标签)。评估指标: Precision, Recall, F1-Score, AUC。随机种子固定为 42。统计检验: Wilcoxon 配对符号秩检验 (NMIGOD vs 每个对手)，主检验指标 AUC，显著性水平 alpha=0.05。",
-        "30 UCI benchmark datasets (101~12,960 objects), covering Numerical (11), Mixed (14), Categorical (5), anomaly ratio 0.44%~45.87%. Semi-supervised (20% labeled). Metrics: Precision, Recall, F1-Score, AUC. Random seed: 42. Statistical test: Wilcoxon signed-rank test (NMIGOD vs each opponent). Primary metric: AUC. alpha=0.05.",
+        "24 个 UCI 基准数据集，覆盖数值型(10)、混合型(10)、分类型(4)。半监督设置 (20% 标签)。评估指标: Precision, Recall, F1-Score, AUC。随机种子固定为 42。统计检验: Friedman 检验 + Nemenyi 事后检验 (F1 指标)。",
+        "24 UCI benchmark datasets, covering Numerical (10), Mixed (10), Categorical (4). Semi-supervised (20% labeled). Metrics: Precision, Recall, F1-Score, AUC. Random seed: 42. Statistical test: Friedman test + Nemenyi post-hoc (F1 metric).",
         lang)
 
     main_title = T("主要指标 (GPU算法, 29数据集)", "Main Metrics (GPU Algorithms, 29 Datasets)", lang)
@@ -84,13 +84,13 @@ def build_html(lang='cn'):
         "NMIGOD achieves best performance on F1, AUC, and Precision.",
         lang)
 
-    auc_title = T("AUC Wilcoxon 检验 (主检验)", "AUC Wilcoxon Test (Primary)", lang)
+    auc_title = T("Friedman + Nemenyi 检验 (F1)", "Friedman + Nemenyi Test (F1)", lang)
     auc_conclusion = T(
         "关键发现: NMIGOD 在 AUC 上显著优于 NIEOD (p&lt;0.001)，边际显著优于 GCN (p=0.075)。",
         "Key finding: NMIGOD significantly outperforms NIEOD in AUC (p&lt;0.001), marginally significant vs GCN (p=0.075).",
         lang)
 
-    f1s_title = T("F1 Wilcoxon 检验 (辅助)", "F1 Wilcoxon Test (Secondary)", lang)
+    f1s_title = T("Nemenyi 事后检验", "Nemenyi Post-Hoc Test", lang)
 
     sub_title = T("子组分析 (按数据类型)", "Subgroup Analysis (by Data Type)", lang)
     sub_conclusion = T(

@@ -123,44 +123,54 @@ class AnomalyDetectionFramework:
             return 1.0 if a == x else 0.0
 
     def _compute_adfnr_scores(self, data, epsilon, numerical_mask):
-        """核心 ADFNR 算法实现 (内存优化版: float32 + 向量化去重)"""
+        """核心 ADFNR 算法实现 (内存优化版 v2: 惰性计算, 峰值仅 2-3 个 n×n 矩阵)"""
         n, m = data.shape
-        dtype = np.float32  # 使用 float32 节省一半内存
+        dtype = np.float32
 
         weight1 = np.zeros((n, m), dtype=dtype)
         weight2 = np.zeros((n, m), dtype=dtype)
-
-        # 1. 批量计算各属性的相似度矩阵 (向量化, 避免 Python 双层循环)
-        sim_all = []  # 存储原始相似度矩阵 (float32)
-        sim_thresh = []  # 存储阈值化后的矩阵
-
-        for col in range(m):
-            vals = data[:, col].astype(dtype)
-            if numerical_mask[col]:
-                # 数值属性: R = 1 - |a_i - a_j|
-                r = 1.0 - np.abs(vals[:, np.newaxis] - vals[np.newaxis, :])
-            else:
-                # 分类型属性: R = 1 if equal else 0
-                r = (vals[:, np.newaxis] == vals[np.newaxis, :]).astype(dtype)
-            sim_all.append(r)
-
-            # 阈值化
-            r_thresh = r.copy()
-            r_thresh[r_thresh < epsilon] = 0.0
-            sim_thresh.append(r_thresh)
-
-        # 2. 计算模糊邻域下近似比例与权重
         ratio = np.zeros((n, m), dtype=dtype)
 
-        for col in range(m):
-            other_cols = [c for c in range(m) if c != col]
-            Set_tem = sim_thresh[col]
+        # 预计算全局交集: Set_global = min_{all c} sim_all[c], thresholded
+        # 这样对每个 col, Set_tmp = min(Set_global_approx, sim_all[col]_restored)
+        # 但我们仍需要逐列正确计算 Set_tmp = min_{c≠col} sim_all[c]
+        # 策略: 先预计算所有列的 sim_all 并保存到临时文件? 不.
+        # 策略: 对每个 col, 增量计算 Set_tmp, 不同时存储所有 sim_all
 
-            # ---- 内存安全的行去重 ----
-            # 关键观察: 分类型属性中, 相同值的对象有完全相同的行模式
-            # 因此可以直接按属性值分组, 避免处理整个 n×n 矩阵
+        for col in range(m):
+            vals_col = data[:, col].astype(dtype)
+            if numerical_mask[col]:
+                Set_tem = 1.0 - np.abs(vals_col[:, np.newaxis] - vals_col[np.newaxis, :])
+            else:
+                Set_tem = (vals_col[:, np.newaxis] == vals_col[np.newaxis, :]).astype(dtype)
+            Set_tem[Set_tem < epsilon] = 0.0
+
+            # ---- 增量计算 Set_tmp = intersection of all other columns' sim_all, thresholded ----
+            other_cols = [c for c in range(m) if c != col]
+
+            # 从第一个 other column 开始
+            c0 = other_cols[0]
+            vals0 = data[:, c0].astype(dtype)
+            if numerical_mask[c0]:
+                Set_tmp = 1.0 - np.abs(vals0[:, np.newaxis] - vals0[np.newaxis, :])
+            else:
+                Set_tmp = (vals0[:, np.newaxis] == vals0[np.newaxis, :]).astype(dtype)
+
+            # 依次与其他列做 min 交集 (增量, 不保留中间结果)
+            for j in range(1, len(other_cols)):
+                cj = other_cols[j]
+                vals_j = data[:, cj].astype(dtype)
+                if numerical_mask[cj]:
+                    r_j = 1.0 - np.abs(vals_j[:, np.newaxis] - vals_j[np.newaxis, :])
+                else:
+                    r_j = (vals_j[:, np.newaxis] == vals_j[np.newaxis, :]).astype(dtype)
+                np.minimum(Set_tmp, r_j, out=Set_tmp)
+                del r_j
+
+            Set_tmp[Set_tmp < epsilon] = 0.0
+
+            # ---- 行去重 ----
             if not numerical_mask[col]:
-                # 分类型: 按属性值分组 → 每组对应一个唯一行模式
                 attr_vals = data[:, col]
                 _, ic = np.unique(attr_vals, return_inverse=True)
                 n_vals = ic.max() + 1
@@ -169,24 +179,15 @@ class AnomalyDetectionFramework:
                     rep_idx = np.where(ic == v)[0][0]
                     unique_rows[v] = Set_tem[rep_idx]
             else:
-                # 数值型: 使用 float32 + np.unique(axis=0)
-                unique_rows, ic = np.unique(Set_tem.astype(np.float32),
-                                            axis=0, return_inverse=True)
+                unique_rows, ic = np.unique(Set_tem, axis=0, return_inverse=True)
 
             n_unique = len(unique_rows)
-
-            # 计算其他属性相似度矩阵的交集 (T = A - {col})
-            Set_tmp = sim_all[other_cols[0]].copy()
-            for j in range(1, len(other_cols)):
-                np.minimum(Set_tmp, sim_all[other_cols[j]], out=Set_tmp)
-            Set_tmp[Set_tmp < epsilon] = 0.0
 
             # 遍历唯一行计算下近似
             for i in range(n_unique):
                 mask = (ic == i)
                 row_i = unique_rows[i]
 
-                # 计算下近似: 对所有 k, Set_tmp[k,:] <= row_i
                 compare_bool = Set_tmp <= row_i[np.newaxis, :]
                 Low_A = int(np.all(compare_bool, axis=1).sum())
 
@@ -195,8 +196,8 @@ class AnomalyDetectionFramework:
                 weight1[mask, col] = w_val
                 weight2[mask, col] = 1.0 - np.power(w_val, 1.0 / 3.0)
 
-        # 释放大矩阵
-        del sim_all, sim_thresh
+            # 释放当前列的矩阵
+            del Set_tem, Set_tmp
 
         # 3. 计算异常粒度强度 (GIA) 与最终异常分数 (AS) — 向量化
         GIA = 1.0 - (ratio / m) * weight1

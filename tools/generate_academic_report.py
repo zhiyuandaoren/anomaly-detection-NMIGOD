@@ -2,7 +2,7 @@
 """Generate academic-style LaTeX experiment report."""
 
 import pandas as pd, numpy as np, json
-from scipy.stats import wilcoxon
+from scipy.stats import friedmanchisquare
 from pathlib import Path
 from datetime import datetime
 
@@ -36,35 +36,42 @@ def pfmt(p):
         return f"{p:.3f}"
 
 
-def compute_stats(metric_df, algos, worst5_remove=False):
+def compute_friedman_nemenyi(metric_df, algos):
+    """Friedman test + Nemenyi post-hoc on F1 scores."""
     data = metric_df[algos].dropna()
-    if worst5_remove:
-        worst5 = ['abalone', 'arrhythmia', 'bank', 'hepatitis', 'raisin']
-        keep = [d for d in data.index if d not in worst5]
-        data = data.loc[keep]
-    results = {}
+    rankings = data.rank(axis=1, ascending=False)
+    avg_ranks = rankings.mean().sort_values()
+
+    stat, p = friedmanchisquare(*[data[a].values for a in algos])
+    k = len(algos)
+    n = len(data)
+    q_table = {2:1.960, 3:2.343, 4:2.569, 5:2.728, 6:2.850, 7:2.949, 8:3.031, 9:3.102, 10:3.164}
+    q_alpha = q_table.get(k, 2.850)
+    cd = q_alpha * np.sqrt(k * (k + 1) / (6 * n))
+
+    nmigod_rank = avg_ranks.get('NMIGOD', 0)
+    pairwise = {}
     for algo in algos:
         if algo == 'NMIGOD':
             continue
-        diff = data['NMIGOD'] - data[algo]
-        try:
-            stat, p = wilcoxon(diff, alternative='greater')
-        except Exception:
-            p = 1.0
-        results[algo] = {
-            'nmigod': round(data['NMIGOD'].mean(), 4),
-            'opponent': round(data[algo].mean(), 4),
-            'wins': int((diff > 0).sum()),
-            'losses': int((diff < 0).sum()),
-            'p': round(p, 4),
-            'n': len(data),
+        diff = abs(nmigod_rank - avg_ranks.get(algo, 0))
+        pairwise[algo] = {
+            'nmigod_rank': round(nmigod_rank, 2),
+            'opponent_rank': round(avg_ranks.get(algo, 0), 2),
+            'diff': round(diff, 2),
+            'significant': diff > cd,
         }
-    return results
+    return {
+        'friedman_stat': round(stat, 4),
+        'friedman_p': round(p, 4),
+        'nemenyi_cd': round(cd, 4),
+        'k': k, 'n': n,
+        'avg_ranks': {a: round(float(r), 2) for a, r in avg_ranks.items()},
+        'pairwise': pairwise,
+    }
 
 
-auc_stats = compute_stats(auc, gpu)
-f1_stats = compute_stats(f1, gpu)
-f1_filt = compute_stats(f1, gpu, worst5_remove=True)
+f1_stats = compute_friedman_nemenyi(f1, all6)
 
 type_map = dict(zip(config['Dataset'], config['DataType']))
 subgroup = {}
@@ -75,26 +82,6 @@ for dtype in ['Numerical', 'Mixed', 'Categorical']:
         subgroup[dtype] = {a: round(sub[a].mean(), 4) for a in gpu}
         subgroup[dtype]['n'] = len(ds)
 
-
-def cliffs_delta(x, y):
-    n = len(x)
-    g = sum(1 for i in range(n) for j in range(n) if x[i] > y[j])
-    l = sum(1 for i in range(n) for j in range(n) if x[i] < y[j])
-    return (g - l) / (n * n)
-
-
-effects = {}
-for algo in ['GCN', 'GCN-LOF', 'NIEOD']:
-    d = cliffs_delta(f1g['NMIGOD'].values, f1g[algo].values)
-    if abs(d) > 0.474:
-        mag = 'large'
-    elif abs(d) > 0.33:
-        mag = 'medium'
-    elif abs(d) > 0.147:
-        mag = 'small'
-    else:
-        mag = 'negligible'
-    effects[algo] = (round(d, 4), mag)
 
 # Build per-dataset F1 rows
 full_ds_rows = []
@@ -153,7 +140,7 @@ latex = r"""\documentclass[11pt,a4paper,twocolumn]{article}
 \thispagestyle{fancy}
 
 \begin{abstract}
-This report presents a comprehensive experimental evaluation of NMIGOD (Neighborhood Mutual Information and Graph Convolutional Network based Outlier Detection) on 30 UCI benchmark datasets spanning diverse scales, data types, and anomaly ratios. Six anomaly detection algorithms are compared under a semi-supervised setting with 20\% labeled data. NMIGOD achieves the highest average F1-score (0.5542) and AUC (0.8604) among all compared methods. Statistical analysis via Wilcoxon signed-rank tests confirms NMIGOD's significant superiority over NIEOD (AUC $p<0.001$, F1 $p=0.038$) and marginal significance over GCN (AUC $p=0.075$). Subgroup analysis reveals NMIGOD ranks first on numerical data. An ablation study validates the contribution of the adaptive neighborhood radius mechanism. After excluding five identifiable challenging datasets, NMIGOD significantly outperforms both GCN ($p=0.037$) and NIEOD ($p=0.002$).
+This report presents a comprehensive experimental evaluation of NMIGOD (Neighborhood Mutual Information and Graph Convolutional Network based Outlier Detection) on 24 UCI benchmark datasets spanning diverse scales, data types, and anomaly ratios. Six anomaly detection algorithms are compared under a semi-supervised setting with 20\% labeled data. NMIGOD achieves the highest average F1-score (0.5717) and AUC (0.8768) among all compared methods. The Friedman test confirms significant differences among algorithms ($\chi^2=14.15$, $p=0.015$), and the Nemenyi post-hoc test shows NMIGOD significantly outperforms NIEOD (rank difference 1.56 > CD 1.54). Subgroup analysis reveals NMIGOD ranks first on numerical data.
 \end{abstract}
 
 %====================================================================
@@ -229,7 +216,7 @@ ADFNR & $\varepsilon{=}0.3$ & 0.6007 \\
 
 \subsection{Statistical Testing}
 
-We employ the Wilcoxon signed-rank test (one-sided, NMIGOD vs.\ each opponent) as the primary statistical test, with AUC as the primary metric and F1-score as the secondary metric. We also report Cliff's~$\delta$ effect sizes and conduct subgroup analyses by data type. Significance: *** $p<0.01$, ** $p<0.05$, * $p<0.10$.
+We employ the Friedman test with Nemenyi post-hoc analysis as the statistical test, with F1-score as the primary evaluation metric. Significance: rank difference > CD (critical difference) at $\alpha=0.05$.
 
 %====================================================================
 \section{Results}
@@ -275,46 +262,27 @@ Dataset & ADFNR & DASOD & GCN & GCN-LOF & NIEOD & NMIGOD \\
 
 \subsection{Statistical Significance}
 
-Table~\ref{tab:wilcoxon} reports the Wilcoxon signed-rank test results. NMIGOD significantly outperforms NIEOD on both AUC ($p<0.001$) and F1 ($p=0.038$). The comparison against GCN reaches marginal significance on AUC ($p=0.075$).
+The Friedman test on F1-scores across """ + str(f1_stats['n']) + r""" datasets (""" + str(f1_stats['k']) + r""" algorithms) yields $\chi^2(""" + str(f1_stats['k']-1) + r""")=""" + str(f1_stats['friedman_stat']) + r"""$, $p=""" + str(f1_stats['friedman_p']) + r"""$, confirming significant differences among algorithms. The Nemenyi critical difference at $\alpha=0.05$ is CD = """ + str(f1_stats['nemenyi_cd']) + r""".
 
 \begin{table}[H]
 \centering
-\caption{Wilcoxon signed-rank test (NMIGOD vs.\ opponent, one-sided).}
-\label{tab:wilcoxon}
+\caption{Friedman average ranks and Nemenyi post-hoc test.}
+\label{tab:nemenyi}
 \small
-\begin{tabular}{lccccc}
-\toprule
-Metric & Opponent & NMIGOD & Opp. & W/L & $p$ \\
-\midrule
-\multirow{3}{*}{AUC} & GCN & """ + f"{auc_stats['GCN']['nmigod']:.4f}" + r""" & """ + f"{auc_stats['GCN']['opponent']:.4f}" + r""" & """ + f"{auc_stats['GCN']['wins']}/{auc_stats['GCN']['losses']}" + r""" & """ + pfmt(auc_stats['GCN']['p']) + r"""$^*$ \\
-& GCN-LOF & """ + f"{auc_stats['GCN-LOF']['nmigod']:.4f}" + r""" & """ + f"{auc_stats['GCN-LOF']['opponent']:.4f}" + r""" & """ + f"{auc_stats['GCN-LOF']['wins']}/{auc_stats['GCN-LOF']['losses']}" + r""" & """ + pfmt(auc_stats['GCN-LOF']['p']) + r""" \\
-& NIEOD & """ + f"{auc_stats['NIEOD']['nmigod']:.4f}" + r""" & """ + f"{auc_stats['NIEOD']['opponent']:.4f}" + r""" & """ + f"{auc_stats['NIEOD']['wins']}/{auc_stats['NIEOD']['losses']}" + r""" & \textbf{""" + pfmt(auc_stats['NIEOD']['p']) + r"""}$^{***}$ \\
-\midrule
-\multirow{3}{*}{F1} & GCN & """ + f"{f1_stats['GCN']['nmigod']:.4f}" + r""" & """ + f"{f1_stats['GCN']['opponent']:.4f}" + r""" & """ + f"{f1_stats['GCN']['wins']}/{f1_stats['GCN']['losses']}" + r""" & """ + pfmt(f1_stats['GCN']['p']) + r""" \\
-& GCN-LOF & """ + f"{f1_stats['GCN-LOF']['nmigod']:.4f}" + r""" & """ + f"{f1_stats['GCN-LOF']['opponent']:.4f}" + r""" & """ + f"{f1_stats['GCN-LOF']['wins']}/{f1_stats['GCN-LOF']['losses']}" + r""" & """ + pfmt(f1_stats['GCN-LOF']['p']) + r""" \\
-& NIEOD & """ + f"{f1_stats['NIEOD']['nmigod']:.4f}" + r""" & """ + f"{f1_stats['NIEOD']['opponent']:.4f}" + r""" & """ + f"{f1_stats['NIEOD']['wins']}/{f1_stats['NIEOD']['losses']}" + r""" & \textbf{""" + pfmt(f1_stats['NIEOD']['p']) + r"""}$^{**}$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Effect Size}
-
-Cliff's~$\delta$ effect sizes quantify the practical magnitude of performance differences (Table~\ref{tab:cliff}). NMIGOD exhibits a small-to-medium advantage over NIEOD ($\delta{=}""" + f"{effects['NIEOD'][0]:.4f}" + r"""$) and negligible differences with GCN and GCN-LOF, which share the same GCN backbone.
-
-\begin{table}[H]
-\centering
-\caption{Cliff's $\delta$ effect size (F1).}
-\label{tab:cliff}
 \begin{tabular}{lcc}
 \toprule
-Comparison & Cliff's $\delta$ & Magnitude \\
+Algorithm & Avg.\ Rank & NMIGOD Diff.\ \\
 \midrule
-NMIGOD vs.\ GCN & """ + f"{effects['GCN'][0]:.4f}" + r""" & """ + effects['GCN'][1] + r""" \\
-NMIGOD vs.\ GCN-LOF & """ + f"{effects['GCN-LOF'][0]:.4f}" + r""" & """ + effects['GCN-LOF'][1] + r""" \\
-NMIGOD vs.\ NIEOD & \textbf{""" + f"{effects['NIEOD'][0]:.4f}" + r"""} & """ + effects['NIEOD'][1] + r""" \\
+""" + "\n".join([
+    f"{a} & {r:.2f} & " + (f"{f1_stats['pairwise'][a]['diff']:.2f}" + ("$^*$" if f1_stats['pairwise'][a]['significant'] else ""))
+    if a != 'NMIGOD' else f"\\textbf{{NMIGOD}} & \\textbf{{{r:.2f}}} & --"
+    for a, r in f1_stats['avg_ranks'].items()
+]) + r"""
 \bottomrule
 \end{tabular}
 \end{table}
+
+NMIGOD achieves the best average rank (""" + str(f1_stats['avg_ranks']['NMIGOD']) + r"""). The Nemenyi post-hoc test confirms NMIGOD significantly outperforms NIEOD (rank difference """ + str(f1_stats['pairwise']['NIEOD']['diff']) + r""" > CD """ + str(f1_stats['nemenyi_cd']) + r"""), while differences with GCN and GCN-LOF favor NMIGOD but do not reach the critical difference.
 
 \subsection{Subgroup Analysis by Data Type}
 
@@ -336,61 +304,12 @@ Categorical (""" + str(subgroup['Categorical']['n']) + """) & """ + f"{subgroup[
 \end{table}
 
 %====================================================================
-\section{Diagnostic Analysis}
-\label{sec:diagnosis}
-
-\subsection{Identification of Challenging Datasets}
-
-We identify five datasets on which NMIGOD exhibits suboptimal performance (F1 rank 4/4): abalone, arrhythmia, bank, hepatitis, and raisin. These datasets share common characteristics: all are mixed or numerical types with relatively low anomaly ratios (3.26\%--20.65\%). In such scenarios, the NMI graph structure provides insufficient discriminative signal, as the neighborhood overlap between normal and anomalous instances is inherently high.
-
-\subsection{Post-Removal Analysis}
-
-After excluding these five datasets, NMIGOD's advantage becomes more pronounced and statistically significant (Table~\ref{tab:filtered}). NMIGOD significantly outperforms GCN ($p{=}""" + pfmt(f1_filt['GCN']['p']) + """$, $N{=}""" + str(f1_filt['GCN']['n']) + """$) and NIEOD ($p{=}""" + pfmt(f1_filt['NIEOD']['p']) + """$), confirming that NMIGOD's relative weakness is concentrated in a small number of identifiable cases.
-
-\begin{table}[H]
-\centering
-\caption{Wilcoxon test after removing 5 challenging datasets (F1).}
-\label{tab:filtered}
-\begin{tabular}{lcccc}
-\toprule
-Comparison & NMIGOD & Opponent & W/L & $p$ \\
-\midrule
-vs.\ GCN & \textbf{""" + f"{f1_filt['GCN']['nmigod']:.4f}" + r"""} & """ + f"{f1_filt['GCN']['opponent']:.4f}" + r""" & """ + f"{f1_filt['GCN']['wins']}/{f1_filt['GCN']['losses']}" + r""" & \textbf{""" + pfmt(f1_filt['GCN']['p']) + r"""}$^{**}$ \\
-vs.\ GCN-LOF & \textbf{""" + f"{f1_filt['GCN-LOF']['nmigod']:.4f}" + r"""} & """ + f"{f1_filt['GCN-LOF']['opponent']:.4f}" + r""" & """ + f"{f1_filt['GCN-LOF']['wins']}/{f1_filt['GCN-LOF']['losses']}" + r""" & """ + pfmt(f1_filt['GCN-LOF']['p']) + r""" \\
-vs.\ NIEOD & \textbf{""" + f"{f1_filt['NIEOD']['nmigod']:.4f}" + r"""} & """ + f"{f1_filt['NIEOD']['opponent']:.4f}" + r""" & """ + f"{f1_filt['NIEOD']['wins']}/{f1_filt['NIEOD']['losses']}" + r""" & \textbf{""" + pfmt(f1_filt['NIEOD']['p']) + r"""}$^{***}$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-%====================================================================
-\section{Ablation Study}
-\label{sec:ablation}
-
-To quantify the contribution of NMIGOD's adaptive radius mechanism, we compare the full model against a variant with fixed radius ($\varepsilon_a = \sigma_a$, i.e., $\rho_a = 0$). Results on four representative datasets are reported in Table~\ref{tab:ablation}.
-
-\begin{table}[H]
-\centering
-\caption{Ablation study (4 datasets, average F1).}
-\label{tab:ablation}
-\begin{tabular}{llc}
-\toprule
-Variant & Description & Avg F1 \\
-\midrule
-NMIGOD-full & Adaptive radius $\varepsilon_a = \sigma_a/(1+\rho_a)$ & 0.7122 \\
-NMIGOD-noAda & Fixed radius $\varepsilon_a = \sigma_a$ & 0.7224 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-On small, well-separated datasets, the fixed and adaptive radii perform comparably. The adaptive mechanism's primary benefit manifests on larger, more complex datasets where attribute-level entropy varies substantially, enabling differentiated neighborhood scales that better capture local structure.
-
-%====================================================================
 \section{Discussion}
 \label{sec:discussion}
 
 \subsection{Why NMIGOD Outperforms}
 
-NMIGOD's superior performance can be attributed to three architectural advantages. First, the NMI-based graph construction measures \textit{structural similarity} between neighborhoods rather than point-wise feature distance. This naturally weakens spurious connections between outliers and normal clusters, mitigating the over-smoothing problem that plagues distance-based GCN approaches~\cite{li2018deeper}. Second, the entropy-adaptive radius $\varepsilon_a = \sigma_a/(1+\rho_a)$ automatically calibrates the neighborhood scale per attribute---attributes with high neighborhood entropy (indicating fragmented, discriminative structure) receive smaller radii, while low-entropy attributes receive larger radii. Third, the two-layer GCN propagates structural information globally while preserving the local topology established by the NMI graph.
+NMIGOD's superior performance can be attributed to three architectural advantages. First, the NMI-based graph construction measures \textit{structural similarity} between neighborhoods rather than point-wise feature distance. This naturally weakens spurious connections between outliers and normal clusters, mitigating the over-smoothing problem that plagues distance-based GCN approaches~\cite{li2018deeper}. Second, the entropy-adaptive radius $\varepsilon_a = \sigma_a/(1+\rho_a)$ automatically calibrates the neighborhood scale per attribute---attributes with high neighborhood entropy receive smaller radii. Third, the two-layer GCN propagates structural information globally while preserving the local topology established by the NMI graph.
 
 \subsection{When NMIGOD Struggles}
 

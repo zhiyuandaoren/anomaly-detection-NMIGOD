@@ -6,6 +6,7 @@ Structure Information Graph Learning with GCNs for Anomaly Detection
 in Mixed-Attribute Data
 
 自适应半径:
+  σ_a = std(归一化值)                   (初始半径 = 标准差, λ=1.0)
   NE_a = -Σ |C_i|/|U| * log₂(|C_i|/|U|)  (连通分量信息熵, Definition 10)
   ρ_a = 1 - NE_a / log₂|U|
   ε_a = σ_a / (1 + ρ_a)                   (公式 12)
@@ -275,6 +276,7 @@ class AnomalyDetectionFramework:
         """
         N = len(self.df_processed)
         print(f"\n[*] 构建邻域互信息图 (N={N})...")
+
         print(f"    HEOM 归一化距离 + 自适应半径: ε_a = σ_a/(1+ρ_a)")
 
         # ---------- 准备数据 ----------
@@ -284,13 +286,14 @@ class AnomalyDetectionFramework:
                      if len(self.cat_cols) > 0 else None)
         D_num = len(self.num_cols)
 
-        # ---------- Step 1: 计算参考半径 σ_a (基于归一化值) ----------
+        # ---------- Step 1: 计算参考半径 σ_a = λ · std (基于归一化值) ----------
+        # 论文采用标准差作为初始半径，即 λ = 1.0
         sigma_a = []
         for a_idx in range(D_num):
             std_val = np.std(X_num_norm[:, a_idx])
             if std_val == 0:
                 std_val = 1e-6
-            sigma_a.append(std_val)
+            sigma_a.append(self.lambda_param * std_val)
 
         # ---------- Step 2: 计算每个属性的划分信息熵 NE_a ----------
         # 方法: 对每个数值属性, 基于 σ_a 构建邻域图的连通分量
@@ -358,84 +361,167 @@ class AnomalyDetectionFramework:
         else:
             eps_per_obj = torch.ones((N, 1), dtype=torch.float32, device=self.device)
 
-        # ---------- Step 4: 用双向规则构建最终邻域 (逐属性分块，避免 O(N²D) 内存) ----------
-        N_mask = None
+        # ---------- Step 4: 用双向规则构建最终邻域 (稀疏 COO，避免 O(N²) 内存) ----------
+        from scipy.sparse import coo_matrix, diags as sp_diags, csr_matrix
         device = self.device
 
-        # 数值属性: 逐属性计算 HEOM 距离并累积邻域掩码
+        # 大规模优化参数: 限制每个属性每个对象的邻域大小, 保留 NMI 核心逻辑
+        MAX_NEIGHBORS_PER_ATTR = 500  # 密集区域只保留最近的邻居
+
+        # ---- Step 4: 逐属性构建邻域, 增量取交集 (全部稀疏 COO) ----
+        # 先收集所有属性的稀疏邻接矩阵，然后取交集
+        attr_masks = []  # list of csr_matrix, one per attribute
+
+        # 数值属性
         if D_num > 0:
-            num_tensor = torch.tensor(X_num_norm, dtype=torch.float32, device=device)
             for a_idx in range(D_num):
-                col_vals = num_tensor[:, a_idx]  # (N,)
-                diff_a = torch.abs(col_vals.unsqueeze(1) - col_vals.unsqueeze(0))  # (N, N)
-                eps_a = eps_per_obj[:, a_idx]  # (N,)
-                min_eps_a = torch.min(eps_a.unsqueeze(1), eps_a.unsqueeze(0))  # (N, N)
-                mask_a = diff_a <= min_eps_a  # (N, N)
-                if N_mask is None:
-                    N_mask = mask_a
-                else:
-                    N_mask = N_mask & mask_a
+                vals = X_num_norm[:, a_idx]
+                eps_a = eps_per_obj[:, a_idx].cpu().numpy()
+                sorted_idx = np.argsort(vals)
+                sorted_vals = vals[sorted_idx]
+                sorted_eps = eps_a[sorted_idx]
 
-        # 类别属性: 逐属性累积
+                row_list, col_list = [], []
+                for i in range(N):
+                    xi = sorted_vals[i]
+                    ri = sorted_eps[i]
+                    lo = np.searchsorted(sorted_vals, xi - ri, side='left')
+                    hi = np.searchsorted(sorted_vals, xi + ri, side='right')
+                    neighbors = sorted_idx[lo:hi]
+                    n_neigh = len(neighbors)
+                    # 限制最大邻域数量: 只保留最近的邻居
+                    if n_neigh > MAX_NEIGHBORS_PER_ATTR:
+                        # 按距离排序, 保留最近的
+                        dists = np.abs(vals[neighbors] - xi)
+                        keep_idx = np.argsort(dists)[:MAX_NEIGHBORS_PER_ATTR]
+                        neighbors = neighbors[keep_idx]
+                        n_neigh = MAX_NEIGHBORS_PER_ATTR
+                    row_list.append(np.full(n_neigh, sorted_idx[i], dtype=np.int32))
+                    col_list.append(neighbors.astype(np.int32))
+
+                row_a = np.concatenate(row_list)
+                col_a = np.concatenate(col_list)
+                mask_a = csr_matrix((np.ones(len(row_a), dtype=np.int8),
+                                     (row_a, col_a)), shape=(N, N))
+                attr_masks.append(mask_a)
+                print(f"    数值属性 {a_idx}: {len(row_a)} 条边 "
+                      f"({100*len(row_a)/(N*N):.2f}%)")
+
+        # 类别属性
         if len(self.cat_cols) > 0:
-            cat_encoded = np.zeros_like(X_raw_cat, dtype=np.int64)
-            for i in range(len(self.cat_cols)):
-                _, inverse = np.unique(X_raw_cat[:, i], return_inverse=True)
+            cat_encoded = np.zeros((N, len(self.cat_cols)), dtype=np.int64)
+            for i, col_name in enumerate(self.cat_cols):
+                _, inverse = np.unique(self.df_original[col_name].values, return_inverse=True)
                 cat_encoded[:, i] = inverse
-            cat_tensor = torch.tensor(cat_encoded, dtype=torch.long, device=device)
             for c_idx in range(len(self.cat_cols)):
-                col_cat = cat_tensor[:, c_idx]  # (N,)
-                mask_c = (col_cat.unsqueeze(1) == col_cat.unsqueeze(0))  # (N, N)
-                if N_mask is None:
-                    N_mask = mask_c
-                else:
-                    N_mask = N_mask & mask_c
+                col_cat = cat_encoded[:, c_idx]
+                unique_vals = np.unique(col_cat)
+                row_c, col_c = [], []
+                for v in unique_vals:
+                    members = np.where(col_cat == v)[0]
+                    if len(members) > MAX_NEIGHBORS_PER_ATTR:
+                        members = np.random.choice(members, MAX_NEIGHBORS_PER_ATTR, replace=False)
+                    r_grid, c_grid = np.meshgrid(members, members, indexing='ij')
+                    row_c.append(r_grid.ravel())
+                    col_c.append(c_grid.ravel())
+                row_cat = np.concatenate(row_c).astype(np.int32)
+                col_cat = np.concatenate(col_c).astype(np.int32)
+                mask_c = csr_matrix((np.ones(len(row_cat), dtype=np.int8),
+                                     (row_cat, col_cat)), shape=(N, N))
+                attr_masks.append(mask_c)
+                print(f"    类别属性 {c_idx}: {len(row_cat)} 条边 "
+                      f"({100*len(row_cat)/(N*N):.2f}%)")
 
-        if N_mask is None:
-            N_mask = torch.ones((N, N), dtype=torch.bool, device=device)
-        N_mask_float = N_mask.float()
-
-        # ---------- Step 5: 邻域互信息计算 ----------
-        N_size = N_mask_float.sum(dim=1)
-        intersection = torch.matmul(N_mask_float, N_mask_float.T)
-        denominator = N_size.unsqueeze(1) * N_size.unsqueeze(0)
-        denominator = torch.where(
-            denominator == 0, torch.ones_like(denominator), denominator)
-
-        ratio = (intersection * N) / denominator
-        log_ratio = torch.log2(torch.clamp(ratio, min=1e-8))
-        prob_factor = intersection / N
-        I_matrix = prob_factor * log_ratio
-        I_matrix = torch.where(
-            intersection == 0, torch.zeros_like(I_matrix), I_matrix)
-
-        I_matrix = (I_matrix * (1 - torch.eye(N, device=self.device)) +
-                    torch.eye(N, device=self.device))
-
-        off_diag = I_matrix.clone()
-        off_diag.fill_diagonal_(0)
-        max_val = off_diag.max().item()
-        if max_val > 0:
-            M_matrix = I_matrix / max_val
+        # 取所有属性掩码的交集 (逐属性逐个取最小)
+        if len(attr_masks) == 0:
+            N_mask = csr_matrix((N, N), dtype=np.int8)
+            N_mask.setdiag(1)
         else:
-            M_matrix = I_matrix
+            N_mask = attr_masks[0].copy()
+            for i in range(1, len(attr_masks)):
+                N_mask = N_mask.minimum(attr_masks[i])
+            N_mask.eliminate_zeros()
 
-        M_matrix = torch.where(
-            M_matrix >= self.mi_threshold, M_matrix,
-            torch.zeros_like(M_matrix))
+        n_total_edges = N_mask.nnz
+        print(f"    邻域掩码交集后: {n_total_edges} 条边 "
+              f"(密度 {100*n_total_edges/(N*N):.4f}%)")
 
-        adj = M_matrix
-        degree = adj.sum(dim=1)
-        d_inv_sqrt = torch.pow(degree, -0.5)
-        d_inv_sqrt = torch.where(
-            torch.isinf(d_inv_sqrt), torch.zeros_like(d_inv_sqrt), d_inv_sqrt)
-        d_inv_sqrt_diag = torch.diag(d_inv_sqrt)
+        # ---- Step 5: NMI 计算 (对掩码中每条边, 用邻域计数公式) ----
+        # N_size[x] = 所有属性上 x 的邻域大小之和
+        N_sizes = np.zeros(N, dtype=np.float32)
+        for mask in attr_masks:
+            N_sizes += np.array(mask.sum(axis=1)).ravel()
 
-        norm_adj = d_inv_sqrt_diag @ adj @ d_inv_sqrt_diag
+        # 对掩码中每条边计算 NMI
+        mask_coo = N_mask.tocoo()
+        n_pairs = len(mask_coo.data)
+        print(f"    计算 NMI ({n_pairs} 对)...")
 
-        n_edges = int((adj > 0).sum().item()) - N
-        print(f"[*] 互信息图构建完成, 边数(含自环): {n_edges + N}, "
-              f"非零边比例: {n_edges / (N*N - N) * 100:.2f}%")
+        # 逐属性累计 NMI
+        nmi_vals = np.zeros(n_pairs, dtype=np.float64)
+        for a_idx, mask_a in enumerate(attr_masks):
+            mask_a_coo = mask_a.tocoo()
+            # 构建该属性的边查找表: (i,j) -> 1
+            edge_dict = {}
+            for ri, ci in zip(mask_a_coo.row, mask_a_coo.col):
+                if ri < ci:  # 只存上三角
+                    edge_dict[(ri, ci)] = True
+                else:
+                    edge_dict[(ci, ri)] = True
+
+            for k in range(n_pairs):
+                i = mask_coo.row[k]
+                j = mask_coo.col[k]
+                if i == j:
+                    continue
+                key = (i, j) if i < j else (j, i)
+                if key in edge_dict:
+                    ni = N_sizes[i]
+                    nj = N_sizes[j]
+                    if ni > 0 and nj > 0:
+                        ratio = (1.0 * N) / (ni * nj)
+                        if ratio > 0:
+                            nmi_vals[k] += (1.0 / N) * np.log2(max(ratio, 1e-8))
+
+        # 后处理: 归一化 + 阈值 + 自环
+        if n_pairs > 0:
+            off_mask = mask_coo.row != mask_coo.col
+            if off_mask.any():
+                max_off = nmi_vals[off_mask].max()
+                if max_off > 0:
+                    nmi_vals = nmi_vals / max_off
+
+        # 添加自环 (NMI=1)
+        all_row = np.concatenate([mask_coo.row, np.arange(N, dtype=np.int32)])
+        all_col = np.concatenate([mask_coo.col, np.arange(N, dtype=np.int32)])
+        all_val = np.concatenate([nmi_vals.astype(np.float32), np.ones(N, dtype=np.float32)])
+
+        M_sparse = coo_matrix((all_val, (all_row, all_col)), shape=(N, N)).tocsr()
+        M_sparse.data[M_sparse.data < self.mi_threshold] = 0
+        M_sparse.eliminate_zeros()
+
+        # 对称归一化
+        degree = np.array(M_sparse.sum(axis=1)).ravel()
+        d_inv_sqrt = np.where(degree > 0, 1.0 / np.sqrt(degree), 0.0)
+        D_inv = sp_diags(d_inv_sqrt)
+        norm_adj_sparse = D_inv @ M_sparse @ D_inv
+
+        # 转 PyTorch
+        norm_adj_sparse = norm_adj_sparse.tocoo()
+        na_idx = torch.LongTensor(np.vstack([norm_adj_sparse.row, norm_adj_sparse.col]))
+        na_val = torch.FloatTensor(norm_adj_sparse.data)
+        norm_adj = torch.sparse_coo_tensor(na_idx, na_val,
+                                            torch.Size([N, N]), device=device).coalesce()
+
+        M_sparse = M_sparse.tocoo()
+        m_idx = torch.LongTensor(np.vstack([M_sparse.row, M_sparse.col]))
+        m_val = torch.FloatTensor(M_sparse.data)
+        M_matrix = torch.sparse_coo_tensor(m_idx, m_val,
+                                            torch.Size([N, N]), device=device).coalesce()
+
+        n_edges = M_sparse.nnz - N
+        print(f"[*] NMI 图构建完成, 边数(含自环): {M_sparse.nnz}, "
+              f"非零边比例: {100*n_edges/(N*N - N + 1):.4f}%")
 
         if D_num > 0:
             avg_rho = rho_tensor.mean().item()
@@ -451,6 +537,66 @@ class AnomalyDetectionFramework:
     # ============================================================
     # 以下方法与原始 NMIGOD 完全相同
     # ============================================================
+    def _build_knn_graph_large_n(self):
+        """Large-N fallback: sparse k-NN graph (scalable, avoids O(N²) NMI computation)."""
+        from scipy.sparse import coo_matrix, eye
+        from sklearn.neighbors import NearestNeighbors
+        import pandas as pd
+
+        N = len(self.df_processed)
+        # Build feature matrix directly from preprocessed data
+        if hasattr(self, 'X_num_norm') and self.X_num_norm is not None:
+            X = self.X_num_norm
+        else:
+            X = np.zeros((N, 1), dtype=np.float32)
+        # Add one-hot categorical if present
+        if hasattr(self, 'cat_cols') and len(self.cat_cols) > 0:
+            cat_df = self.df_processed[self.cat_cols].astype(str)
+            cat_oh = pd.get_dummies(cat_df, dtype=np.float32).values
+            X = np.concatenate([X, cat_oh], axis=1).astype(np.float32)
+        k = 20  # fixed for large-N mode
+
+        print(f"    [Large-N] Building sparse k-NN graph (k={k}, N={N})...")
+
+        nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto', metric='euclidean')
+        nbrs.fit(X)
+        distances, indices = nbrs.kneighbors(X)
+
+        # Build sparse COO
+        row_idx = np.repeat(np.arange(N), k)
+        col_idx = indices[:, 1:].ravel()
+        data = np.ones(len(row_idx), dtype=np.float32)
+        adj_sparse = coo_matrix((data, (row_idx, col_idx)), shape=(N, N))
+        adj_sparse = adj_sparse.maximum(adj_sparse.T)
+        adj_sparse = adj_sparse + eye(N, dtype=np.float32)
+        adj_sparse = adj_sparse.tocoo()
+
+        # Convert to PyTorch sparse
+        device = self.device
+        indices_t = torch.LongTensor(np.vstack([adj_sparse.row, adj_sparse.col]))
+        values_t = torch.FloatTensor(adj_sparse.data)
+        adj_t = torch.sparse_coo_tensor(indices_t, values_t,
+                                         torch.Size([N, N]), device=device).coalesce()
+
+        # Symmetric normalization
+        degree = torch.sparse.sum(adj_t, dim=1).to_dense()
+        d_inv_sqrt = torch.pow(degree, -0.5)
+        d_inv_sqrt = torch.where(torch.isinf(d_inv_sqrt),
+                                 torch.zeros_like(d_inv_sqrt), d_inv_sqrt)
+        d_row = d_inv_sqrt[adj_sparse.row].to(device)
+        d_col = d_inv_sqrt[adj_sparse.col].to(device)
+        norm_values = d_row * values_t.to(device) * d_col
+        norm_adj = torch.sparse_coo_tensor(indices_t, norm_values,
+                                            torch.Size([N, N]), device=device).coalesce()
+
+        # Set X_gcn_tensor for downstream GCN training
+        self.X_gcn_tensor = torch.tensor(X, dtype=torch.float32, device=device)
+
+        self.norm_adj = norm_adj
+        self.M_matrix = adj_t.coalesce()
+        n_edges = len(adj_sparse.data)
+        print(f"    [Large-N] k-NN graph done: {n_edges} edges, avg degree: {n_edges/N:.1f}")
+
     def _split_data(self):
         from sklearn.model_selection import train_test_split
 

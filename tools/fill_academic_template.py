@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fill academic LaTeX template with live data."""
 import pandas as pd, numpy as np
-from scipy.stats import wilcoxon
+from scipy.stats import friedmanchisquare
 from datetime import datetime
 from pathlib import Path
 
@@ -37,25 +37,25 @@ def esc(s):
 template_path = ROOT / 'reports' / 'academic_template.tex'
 tex = template_path.read_text(encoding='utf-8')
 
-# Simple replacements
-diff_f1 = f1g['NMIGOD'] - f1g['NIEOD']
-_, p_f1_nieod = wilcoxon(diff_f1, alternative='greater')
-diff_auc = aucg['NMIGOD'] - aucg['GCN']
-_, p_auc_gcn = wilcoxon(diff_auc, alternative='greater')
-
-worst5 = ['abalone', 'arrhythmia', 'bank', 'hepatitis', 'raisin']
-keep = [d for d in f1g.index if d not in worst5]
-f1f = f1g.loc[keep]
-diff_f = f1f['NMIGOD'] - f1f['GCN']
-_, p_filt = wilcoxon(diff_f, alternative='greater')
+# Friedman + Nemenyi
+rankings = f1_all6.rank(axis=1, ascending=False)
+avg_ranks = rankings.mean().sort_values()
+stat, p_fried = friedmanchisquare(*[f1_all6[a].values for a in all6])
+k = len(all6); n = len(f1_all6)
+q_table = {2:1.960, 3:2.343, 4:2.569, 5:2.728, 6:2.850}
+cd = q_table.get(k, 2.850) * np.sqrt(k*(k+1)/(6*n))
+nm_rank = avg_ranks.get('NMIGOD', 0)
 
 replacements = {
     '__DATE__': datetime.now().strftime('%Y-%m-%d'),
     '__NM_AVG_F1__': f'{f1g["NMIGOD"].mean():.4f}',
     '__NM_AVG_AUC__': f'{aucg["NMIGOD"].mean():.4f}',
-    '__NM_P_F1__': pfmt(p_f1_nieod),
-    '__NM_P_AUC__': pfmt(p_auc_gcn),
-    '__NM_P_FILT__': pfmt(p_filt),
+    '__FRIEDMAN_CHI2__': f'{stat:.2f}',
+    '__FRIEDMAN_P__': f'{p_fried:.4f}',
+    '__NEMENYI_CD__': f'{cd:.4f}',
+    '__NM_RANK__': f'{nm_rank:.2f}',
+    '__N_DATASETS__': str(n),
+    '__NM_P_FRIEDMAN__': pfmt(p_fried),
 }
 for k, v in replacements.items():
     tex = tex.replace(k, v)

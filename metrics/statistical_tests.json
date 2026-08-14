@@ -1,20 +1,15 @@
 {
-  "n_datasets": 29,
-  "algorithms": [
-    "GCN",
-    "GCN-LOF",
-    "NIEOD",
-    "NMIGOD"
-  ],
-  "friedman_stat": 4.1025,
-  "friedman_p": 0.250609,
-  "significant": false,
-  "nemenyi_cd": 0.871,
+  "n_datasets": 30,
+  "n_algorithms": 6,
+  "friedman_stat": 23.8813,
+  "friedman_p": 0.000229,
+  "nemenyi_cd": 1.3767,
   "avg_ranks": {
-    "NMIGOD": 2.29,
-    "GCN-LOF": 2.33,
-    "GCN": 2.48,
-    "NIEOD": 2.9
-  },
-  "nmigod_best_rank": 1
+    "NMIGOD": 2.58,
+    "GCN": 2.9,
+    "GCN-LOF": 3.05,
+    "ADFNR": 4.02,
+    "DASOD": 4.17,
+    "NIEOD": 4.28
+  }
 }

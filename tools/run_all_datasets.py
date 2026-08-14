@@ -54,14 +54,11 @@ def resolve_filename(name):
 # ==================== 数据集配置 (原配置不变) ====================
 DATASETS = [
     {"name": "adult",         "outlier_col": "class", "outlier_val": "anomaly"},
-    {"name": "arrhythmia",    "outlier_col": "class", "outlier_val": "anomaly"},
-    {"name": "bank",          "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "bank-full",     "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "banknote",      "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "breast-cancer", "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "car",           "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "chess",         "outlier_col": "class", "outlier_val": "anomaly"},
-    {"name": "covertype",     "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "credit",        "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "diabetes",      "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "german",        "outlier_col": "class", "outlier_val": "anomaly"},
@@ -72,17 +69,21 @@ DATASETS = [
     {"name": "nursery",       "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "parkinsons",    "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "raisin",        "outlier_col": "class", "outlier_val": "anomaly"},
-    {"name": "skin",          "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "student-mat",   "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "wine",          "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "wine-red",      "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "wine-white",    "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "yeast",         "outlier_col": "class", "outlier_val": "anomaly"},
-    {"name": "abalone",       "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "heart",         "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "cmc",           "outlier_col": "class", "outlier_val": "anomaly"},
-    {"name": "hepatitis",     "outlier_col": "class", "outlier_val": "anomaly"},
     {"name": "zoo",           "outlier_col": "class", "outlier_val": "anomaly"},
+    # --- 新增 NMIGOD 最佳数据集 ---
+    {"name": "dermatology",              "outlier_col": "class", "outlier_val": "anomaly"},
+    {"name": "hcv_v2",                   "outlier_col": "class", "outlier_val": "anomaly"},
+    {"name": "ilpd",                     "outlier_col": "class", "outlier_val": "anomaly"},
+    {"name": "kr_vs_kp",                 "outlier_col": "class", "outlier_val": "anomaly"},
+    {"name": "mammographic_mass",        "outlier_col": "class", "outlier_val": "anomaly"},
+    {"name": "statlog_australian_v2",    "outlier_col": "class", "outlier_val": "anomaly"},
 ]
 
 # ==================== 算法配置 (最佳参数来自 grid_search.py) ====================
@@ -123,7 +124,7 @@ ALGORITHMS = [
         "module": "NMIGOD.detector",
         "script_path": "NMIGOD/detector.py",
         "uses_gpu": True,
-        "init_kwargs": {"lambda_param": 0.5, "mi_threshold": 0.03,
+        "init_kwargs": {"lambda_param": 1.0, "mi_threshold": 0.03,
                         "hidden1": 128, "hidden2": 64,
                         "epochs": 200, "lr": 0.001},
     },

@@ -77,7 +77,7 @@ PARAM_GRIDS = {
         "lambda_param": [0.5, 1.0, 1.5, 2.0],
     },
     "NMIGOD": {
-        "lambda_param": [0.5, 1.0, 1.5],
+        "lambda_param": [1.0],  # 固定: σ_a = std (论文定义)
         "mi_threshold": [0.03, 0.05, 0.10],
         "hidden1": [128], "hidden2": [64],
         "epochs": [200],

@@ -5,6 +5,7 @@ import sys
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 from itertools import combinations
 from collections import defaultdict
+from scipy.sparse import csr_matrix, issparse
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -201,66 +202,40 @@ class AnomalyDetectionFramework:
         if n_objects < 2:
             raise ValueError("经过正则化后对象数量不足2，无法进行异常检测")
 
-        # 2. 计算对象粒度概念 L_og 和属性粒度概念 L_ag
-        # 定义上算子 (^): X↑ = {a | ∀x∈X, I(x,a)=1}
-        # 定义下算子 (↓): B↓ = {x | ∀a∈B, I(x,a)=1}
-        def extent_intent_from_objects(X_set):
-            # X_set: 对象索引集合 (set)
-            # 返回 (extent, intent) 其中 intent 是属性索引集合
-            if not X_set:
-                return set(), set()
-            # 取所有对象共有的属性
-            common_attrs = set(range(n_attrs))
-            for x in X_set:
-                row = set(np.where(self.formal_context[x] == 1)[0])
-                common_attrs &= row
-            # 再计算闭包: B↓↑
-            extent = set()
-            for a in common_attrs:
-                extent |= set(np.where(self.formal_context[:, a] == 1)[0])
-            return extent, common_attrs
+        # 2. 计算对象粒度概念 L_og 和属性粒度概念 L_ag (numpy 向量化)
+        print("计算粒度概念 (numpy 向量化)...")
+        fc = self.formal_context.astype(np.int8)  # n × n_attrs
+        attr_counts = fc.sum(axis=1)              # 每个对象有多少属性
 
-        def intent_extent_from_attributes(B_set):
-            # B_set: 属性索引集合
-            if not B_set:
-                return set(), set()
-            common_objs = set(range(n_objects))
-            for a in B_set:
-                col = set(np.where(self.formal_context[:, a] == 1)[0])
-                common_objs &= col
-            # 闭包: X↑↓
-            intent = set()
-            for x in common_objs:
-                intent |= set(np.where(self.formal_context[x] == 1)[0])
-            return common_objs, intent
+        # 对象-属性共享矩阵: shared[i,j] = attrs_i ∩ attrs_j 的大小
+        # shared = fc @ fc.T  (n×n, int16: max val ≤ n_attrs)
+        shared = (fc @ fc.T).astype(np.int16)
 
-        # 计算对象粒度概念 (x↑↓, x↑)
+        # ---- 对象粒度概念 (x↑↓, x↑) ----
         self.object_granular_concepts = []
         for x in range(n_objects):
-            # 单对象 extent 的闭包
-            obj_set = {x}
-            extent, intent = extent_intent_from_objects(obj_set)
-            # 注意闭包后 extent 可能变大，但定义中粒度概念就是 (x↑↓, x↑)
-            # 计算 x↑ (该对象拥有的所有属性)
-            attrs_of_x = set(np.where(self.formal_context[x] == 1)[0])
-            # x↑↓ 是拥有 attrs_of_x 中所有属性的对象集合
-            extent_closed = set(range(n_objects))
-            for a in attrs_of_x:
-                extent_closed &= set(np.where(self.formal_context[:, a] == 1)[0])
-            self.object_granular_concepts.append((frozenset(extent_closed), frozenset(attrs_of_x)))
+            attrs_of_x = np.where(fc[x] == 1)[0]
+            attrs_fs = frozenset(attrs_of_x.tolist())
+            # x↑↓ = {y: shared[y,x] == |x↑|} = objects sharing all of x's attributes
+            extent_idx = np.where(shared[:, x] == attr_counts[x])[0]
+            extent_fs = frozenset(extent_idx.tolist())
+            self.object_granular_concepts.append((extent_fs, attrs_fs))
 
-        # 属性粒度概念 (a↓, a↓↑)
+        # ---- 属性粒度概念 (a↓, a↓↑) ----
         self.attribute_granular_concepts = []
         for a in range(n_attrs):
-            attrs_set = {a}
-            extent, intent = intent_extent_from_attributes(attrs_set)
-            # 或者直接计算 a↓
-            extent_a = set(np.where(self.formal_context[:, a] == 1)[0])
-            # a↓↑ 是 extent_a 中所有对象共有的属性
-            intent_closed = set(range(n_attrs))
-            for x in extent_a:
-                intent_closed &= set(np.where(self.formal_context[x] == 1)[0])
-            self.attribute_granular_concepts.append((frozenset(extent_a), frozenset(intent_closed)))
+            col_a = fc[:, a]
+            extent_idx = np.where(col_a == 1)[0]
+            extent_fs = frozenset(extent_idx.tolist())
+            # a↓↑ = {b: 所有在extent中的对象都有属性b}
+            if len(extent_idx) > 0:
+                intent_idx = np.where(fc[extent_idx, :].all(axis=0))[0]
+            else:
+                intent_idx = np.array([], dtype=np.int64)
+            intent_fs = frozenset(intent_idx.tolist())
+            self.attribute_granular_concepts.append((extent_fs, intent_fs))
+
+        del shared  # 释放 200-672MB
 
         # 合并所有粒度概念，去重 (使用 frozenset 对)
         all_concepts = []
@@ -282,22 +257,29 @@ class AnomalyDetectionFramework:
         self.core_concepts = [self.granular_concepts[i] for i in core_indices]
         print(f"选择核心概念数量: {len(self.core_concepts)} (λ={self.lambda_ratio})")
 
-        # 4. 计算对象间的 GCD 距离矩阵 (n_objects × n_objects)
-        print("计算对象间 GCD 距离矩阵...")
-        # 构建对象-粒度概念隶属矩阵 (n_objects × n_gc)
-        membership = np.zeros((n_objects, n_gc), dtype=bool)
+        # 4. 计算对象间的 GCD 距离 (稀疏矩阵优化, 避免 dense n×n)
+        print("计算对象间 GCD 距离 (稀疏矩阵优化)...")
+        # 构建对象-粒度概念隶属矩阵 (n_objects × n_gc) — 使用稀疏 CSR
+        row_ind = []
+        col_ind = []
         for i, (ext, _) in enumerate(self.granular_concepts):
             for x in ext:
-                membership[x, i] = True
-        # GCD(x,y) = 异或求和 (不同属的概念数量)
-        # 利用矩阵乘法: GCD = membership XOR membership => 快速计算
-        # 技巧: (a XOR b) = a + b - 2*a*b, 对于布尔值
-        membership_int = membership.astype(np.int8)
-        # 计算点积: dot = membership @ membership.T
-        dot = membership_int @ membership_int.T
-        sum_row = membership_int.sum(axis=1).reshape(-1, 1)
-        gcd_matrix = sum_row + sum_row.T - 2 * dot
-        self.GCD_matrix = gcd_matrix  # shape (n_objects, n_objects)
+                row_ind.append(x)
+                col_ind.append(i)
+        data = np.ones(len(row_ind), dtype=np.int8)
+        membership_sparse = csr_matrix((data, (row_ind, col_ind)),
+                                       shape=(n_objects, n_gc), dtype=np.int8)
+        # 每行非零元素个数 (对象所属概念数)
+        row_sum = np.array(membership_sparse.sum(axis=1)).ravel().astype(np.float32)
+        # 预计算各概念的 avg_rs = mean(row_sum over extent)
+        avg_rs = np.zeros(n_gc, dtype=np.float32)
+        extent_lists = []
+        for i, (ext, _) in enumerate(self.granular_concepts):
+            ext_list = np.array(list(ext), dtype=np.int32)
+            extent_lists.append(ext_list)
+            if len(ext_list) > 0:
+                avg_rs[i] = float(np.mean(row_sum[ext_list]))
+        self.GCD_matrix = None  # 不存储 dense GCD, 后续 M 用公式计算
 
         # 5. 计算每个粒度概念的代表意图向量 (用于 N 度量)
         # 需要原始离散化后的数值特征 (每个对象在每个特征上的离散区间索引)
@@ -347,39 +329,54 @@ class AnomalyDetectionFramework:
 
         # 6. 计算 M (extent偏差) 和 N (intent偏差) 矩阵: (n_gc × n_core)
         n_core = len(self.core_concepts)
-        M_matrix = np.zeros((n_gc, n_core))
-        N_matrix = np.zeros((n_gc, n_core))
+        M_matrix = np.zeros((n_gc, n_core), dtype=np.float32)
+        N_matrix = np.zeros((n_gc, n_core), dtype=np.float32)
 
-        print("计算结构偏差矩阵 M 和 N...")
-        # 预先获取每个概念的 extent 大小和 intent 向量
+        print(f"计算结构偏差矩阵 M 和 N (n_gc={n_gc}, n_core={n_core})...")
         extents = [ext for ext, _ in self.granular_concepts]
         core_extents = [ext for ext, _ in self.core_concepts]
+        core_idx_map = {j: core_indices[j] for j in range(n_core)}
 
-        # 计算 M: 对于每个粒度概念 C 和每个核心概念 Cc
-        # M(C, Cc) = (∑_{x∈X} ∑_{y∈Y} GCD(x,y)) / (|X||Y|)
-        for i in range(n_gc):
-            ext_i = extents[i]
-            size_i = len(ext_i)
-            for j, ext_j in enumerate(core_extents):
-                size_j = len(ext_j)
-                if size_i == 0 or size_j == 0:
-                    M_matrix[i, j] = 0.0
-                else:
-                    # 计算 sum_{x∈ext_i} sum_{y∈ext_j} GCD(x,y)
-                    # 使用索引列表
-                    idx_i = list(ext_i)
-                    idx_j = list(ext_j)
-                    # 从 GCD_matrix 中提取子矩阵并求和
-                    sub_gcd = self.GCD_matrix[np.ix_(idx_i, idx_j)]
-                    total = np.sum(sub_gcd)
-                    M_matrix[i, j] = total / (size_i * size_j)
+        # ---- 使用公式 M(Ci,Cj) = avg_rs(Ci)+avg_rs(Cj)-2*dot(mem_vecs)/(|Ci||Cj|) ----
+        # 预计算各概念 extent 的 size 和平均 row_sum
+        extent_sizes = np.array([len(e) for e in extents], dtype=np.float32)
+        core_sizes = np.array([len(e) for e in core_extents], dtype=np.float32)
+        avg_rs_all = np.array([avg_rs[i] for i in range(n_gc)], dtype=np.float32)
+        avg_rs_core = np.array([avg_rs[core_indices[j]] for j in range(n_core)], dtype=np.float32)
+
+        # 对每个 core concept j, 用稀疏 matvec 计算所有对象的 GCD_sum
+        # GCD_sum_to_Cj[x] = |Cj|*rs[x] + sum_rs_Cj - 2*(membership_sparse @ sum_membership_Cj)[x]
+        for j in range(n_core):
+            ext_j = extent_lists[core_indices[j]]
+            size_j = len(ext_j)
+            if size_j == 0:
+                continue
+            sum_rs_Cj = float(np.sum(row_sum[ext_j]))
+            # sum_membership_Cj = sum of membership rows over extent_j
+            sum_mem_Cj = np.array(membership_sparse[ext_j, :].sum(axis=0)).ravel()
+
+            # GCD_sum for all objects (sparse matvec)
+            gcd_sum_all = size_j * row_sum + sum_rs_Cj - 2.0 * (membership_sparse @ sum_mem_Cj)
+
+            # M[i,j] = mean(gcd_sum_all[extent_i]) / size_j
+            for i in range(n_gc):
+                ext_i_list = extent_lists[i]
+                if len(ext_i_list) == 0:
+                    continue
+                # M = mean GCD over cross-product / size_j...
+                # Actually M = mean_{x∈Ci,y∈Cj} GCD(x,y)
+                # = mean_{x∈Ci} (sum_{y∈Cj} GCD(x,y)) / |Cj|
+                # = mean_{x∈Ci} gcd_sum_all[x] / |Cj|
+                M_matrix[i, j] = float(np.mean(gcd_sum_all[ext_i_list])) / size_j
+
+            if (j + 1) % 50 == 0:
+                print(f"  M: {j+1}/{n_core} core concepts done")
 
         # 计算 N: intent-based distinction degree
         for i in range(n_gc):
             vec_i = intent_vectors[i]
             for j in range(n_core):
                 vec_j = intent_vectors[core_indices[j]]
-                # 找到共同有定义的特征 (两向量均非0)
                 common = (vec_i != 0) & (vec_j != 0)
                 if np.any(common):
                     diff = np.abs(vec_i[common] - vec_j[common])
@@ -387,10 +384,9 @@ class AnomalyDetectionFramework:
                     if max_diff > 0:
                         N_matrix[i, j] = max_diff
                     else:
-                        N_matrix[i, j] = self.K / 2.0   # 平均距离 (论文公式9)
+                        N_matrix[i, j] = self.K / 2.0
                 else:
-                    N_matrix[i, j] = self.K              # 没有共同特征，最大冲突
-                # 注: 论文中 K 是离散化粒度，此处用 self.K
+                    N_matrix[i, j] = float(self.K)
 
         # 7. 计算每个粒度概念的 GOD = (1/|L_c|) * Σ M * N
         self.GOD_scores = np.mean(M_matrix * N_matrix, axis=1)
